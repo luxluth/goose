@@ -173,159 +173,213 @@ pub const Value = union(ValueTag) {
 
     tuple: TTuple,
 
-    pub fn tuple(of: []const ValueTag, values: []const *Value) Value {
-        return .{ .tuple = .{ .of = of, .values = values } };
-    }
-
-    pub fn dict(of: [2]ValueTag, values: []const *TDict.Entry) Value {
-        return .{ .dict = .{ .of = of, .values = values } };
-    }
-
-    pub fn array(of: ValueTag, values: []const *Value) Value {
-        return .{ .array = .{ .of = of, .values = values } };
-    }
-
-    pub fn variant(value: *Value) Value {
-        return .{ .variant = .{ .value = value } };
-    }
-
-    pub fn struc(fields: []const *Value) Value {
-        return .{ .struc = .{ .fields = fields } };
-    }
-
-    pub fn byte(value: u8) Value {
-        return .{ .byte = .{ .value = value } };
-    }
-
-    pub fn @"bool"(value: bool) Value {
-        return .{ .bool = .{ .value = @intFromBool(value) } };
-    }
-
-    pub fn int16(value: i16) Value {
-        return .{ .int16 = .{ .value = value } };
-    }
-
-    pub fn uint16(value: u16) Value {
-        return .{ .uint16 = .{ .value = value } };
-    }
-
-    pub fn int32(value: i32) Value {
-        return .{ .int32 = .{ .value = value } };
-    }
-
-    pub fn uint32(value: u32) Value {
-        return .{ .uint32 = .{ .value = value } };
-    }
-
-    pub fn int64(value: i64) Value {
-        return .{ .int64 = .{ .value = value } };
-    }
-
-    pub fn uint64(value: u64) Value {
-        return .{ .uint64 = .{ .value = value } };
-    }
-
-    pub fn double(value: f64) Value {
-        return .{ .double = .{ .value = value } };
-    }
-
-    pub fn unixFd(value: u32) Value {
-        return .{ .unixFd = .{ .value = value } };
-    }
-
-    pub fn string(value: [:0]const u8) Value {
-        return .{ .string = .{ .value = value } };
-    }
-
-    pub fn objectPath(value: [:0]const u8) Value {
-        return .{ .objectPath = .{ .value = value } };
-    }
-
-    pub fn signature(value: [:0]const u8) Value {
-        return .{ .signature = .{ .value = value } };
-    }
-
-    pub fn repr(
-        self: Value,
-        allocator: std.mem.Allocator,
-    ) !std.ArrayList(u8) {
-        var buffer = std.ArrayList(u8).init(allocator);
-
-        switch (self) {
-            .byte => |value| {
-                buffer.append(value.__repr);
+    fn reprLength(comptime T: type) comptime_int {
+        var len = 0;
+        switch (@typeInfo(T)) {
+            .Int => |_| {
+                len = 1;
             },
-            .bool => |value| {
-                buffer.append(value.__repr);
+            .Bool => {
+                len = 1;
             },
-            .int16 => |value| {
-                buffer.append(value.__repr);
-            },
-            .uint16 => |value| {
-                buffer.append(value.__repr);
-            },
-            .int32 => |value| {
-                buffer.append(value.__repr);
-            },
-            .uint32 => |value| {
-                buffer.append(value.__repr);
-            },
-            .int64 => |value| {
-                buffer.append(value.__repr);
-            },
-            .uint64 => |value| {
-                buffer.append(value.__repr);
-            },
-            .double => |value| {
-                buffer.append(value.__repr);
-            },
-            .unixFd => |value| {
-                buffer.append(value.__repr);
-            },
-
-            .string => |value| {
-                buffer.append(value.__repr);
-            },
-            .objectPath => |value| {
-                buffer.append(value.__repr);
-            },
-            .signature => |value| {
-                buffer.append(value.__repr);
-            },
-
-            .struc => |value| {
-                buffer.append('(');
-                for (value.fields) |field| {
-                    const parts = try field.repr(allocator);
-                    defer parts.deinit();
-                    for (parts.items) |part| buffer.append(part);
+            .Float => |info| {
+                if (info.bits != 64) {
+                    @compileError("Only f64 are legible for the D-Bus data specification");
                 }
-                buffer.append(')');
+                len = 1;
             },
-            .variant => |value| {
-                buffer.append(value.__repr);
-            },
-            .array => |ar| {
-                // aTYPE -> TYPE: signature of the types in it
-                buffer.append('a');
-                if (ar.of == ValueTag.array or ar.of == ValueTag.dict or ar.of == ValueTag.tuple or ar.of == ValueTag.struc) {} else {}
-                unreachable;
-            },
-            .dict => |_| {
-                unreachable;
-                // {kEY_TYPEvALUE_TYPE} -> kEY_TYPE: key of the value,
-                // -> vALUE_TYPE: type of the value
-            },
-
-            .tuple => |value| {
-                for (value.values) |field| {
-                    const parts = try field.repr(allocator);
-                    defer parts.deinit();
-                    for (parts.items) |part| buffer.append(part);
-                }
+            else => {
+                @compileError("connot get the signature length of this type");
             },
         }
+        return len;
+    }
 
-        return buffer;
+    fn getRepr(comptime T: type, len: comptime_int, start: comptime_int, xs: *[len]u8) void {
+        switch (@typeInfo(T)) {
+            .ComptimeInt => {
+                @compileError("unable to evaluate the size of a comptime_int");
+            },
+            .Int => |info| {
+                switch (info.bits) {
+                    1 => {
+                        @compileError("if you want to create a boolean value, use a bool instead of i1");
+                    },
+                    8 => {
+                        xs[start] = switch (info.signedness) {
+                            .unsigned => 'y',
+                            else => @compileError("i8 is not part of the D-Bus data specification"),
+                        };
+                    },
+                    16 => {
+                        xs[start] = switch (info.signedness) {
+                            .unsigned => 'q',
+                            .signed => 'n',
+                        };
+                    },
+                    32 => {
+                        xs[start] = switch (info.signedness) {
+                            .unsigned => 'u',
+                            .signed => 'i',
+                        };
+                    },
+                    64 => {
+                        xs[start] = switch (info.signedness) {
+                            .unsigned => 't',
+                            .signed => 'x',
+                        };
+                    },
+                    else => {
+                        @compileError("unsupported data type by the D-Bus specification");
+                    },
+                }
+            },
+            .Float => {
+                xs[start] = 'd';
+            },
+            .Bool => {
+                xs[start] = 'b';
+            },
+            else => {
+                @compileError("unable to create a signature for this type");
+            },
+        }
+    }
+
+    pub fn Array(comptime T: type) type {
+        const repr_len = reprLength(T);
+        return struct {
+            inner: []const T,
+            repr: [repr_len + 1]u8,
+            const Self = @This();
+
+            pub fn new(xs: []const T) Self {
+                var repr_arr = [_]u8{0} ** (repr_len + 1);
+                repr_arr[0] = 'a';
+                getRepr(T, repr_len + 1, 1, &repr_arr);
+                return Self{
+                    .inner = xs,
+                    .repr = repr_arr,
+                };
+            }
+        };
+    }
+
+    // pub fn Tuple(comptime T: type) type {
+    //     return .{ .tuple = .{ .of = of, .values = values } };
+    // }
+
+    // pub fn Dict(of: [2]ValueTag, values: []const *TDict.Entry) Value {
+    //     return .{ .dict = .{ .of = of, .values = values } };
+    // }
+    //
+    // pub fn Variant(value: *Value) Value {
+    //     return .{ .variant = .{ .value = value } };
+    // }
+    //
+    // pub fn Struct(fields: []const *Value) Value {
+    //     return .{ .struc = .{ .fields = fields } };
+    // }
+
+    fn BasicType(comptime T: type) type {
+        const repr_len = reprLength(T);
+        return struct {
+            value: T,
+            repr: [repr_len]u8,
+            const Self = @This();
+
+            pub fn new(value: T) Self {
+                var repr_arr = [_]u8{0} ** repr_len;
+                getRepr(T, repr_len, 0, &repr_arr);
+                return Self{
+                    .value = value,
+                    .repr = repr_arr,
+                };
+            }
+        };
+    }
+
+    fn StringLike(r: u8) type {
+        const repr_len = 1;
+        return struct {
+            value: [:0]const u8,
+            repr: [repr_len]u8,
+            const Self = @This();
+
+            pub fn new(value: [:0]const u8) Self {
+                var repr_arr = [_]u8{0} ** repr_len;
+                repr_arr[0] = r;
+                return Self{
+                    .value = value,
+                    .repr = repr_arr,
+                };
+            }
+        };
+    }
+
+    pub fn Int16() type {
+        return BasicType(i16);
+    }
+
+    pub fn Uint16() type {
+        return BasicType(u16);
+    }
+
+    pub fn Int32() type {
+        return BasicType(i32);
+    }
+
+    pub fn Uint32() type {
+        return BasicType(u32);
+    }
+
+    pub fn Int64() type {
+        return BasicType(i64);
+    }
+
+    pub fn Uint64() type {
+        return BasicType(u64);
+    }
+
+    pub fn Double() type {
+        return BasicType(f64);
+    }
+
+    pub fn Byte() type {
+        return BasicType(u8);
+    }
+
+    pub fn Bool() type {
+        return BasicType(bool);
+    }
+
+    pub fn UnixFd() type {
+        const repr_len = reprLength(u32);
+        return struct {
+            handle: u32,
+            repr: [repr_len]u8,
+            const Self = @This();
+
+            pub fn new(handle: u32) Self {
+                var repr_arr = [_]u8{0} ** repr_len;
+                repr_arr[0] = 'h';
+                return Self{
+                    .handle = handle,
+                    .repr = repr_arr,
+                };
+            }
+        };
+    }
+
+    pub fn String() type {
+        return StringLike('s');
+    }
+
+    pub fn ObjectPath() type {
+        return StringLike('o');
+    }
+
+    pub fn Signature() type {
+        return StringLike('g');
     }
 };
