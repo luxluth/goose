@@ -2,7 +2,7 @@ const std = @import("std");
 
 /// Represent a dbus value
 pub const Value = struct {
-    pub const Str = [:0]const u8;
+    pub const Str = []const u8;
 
     fn reprLength(comptime T: type) comptime_int {
         var len = 0;
@@ -127,13 +127,13 @@ pub const Value = struct {
 
         return struct {
             inner: []const T,
-            repr: [repr_len]u8,
+            repr: []const u8,
             const Self = @This();
 
             pub fn new(xs: []const T) Self {
                 return Self{
                     .inner = xs,
-                    .repr = rr,
+                    .repr = &rr,
                 };
             }
         };
@@ -159,13 +159,13 @@ pub const Value = struct {
         const rr = repr_arr;
         return struct {
             inner: T,
-            repr: [repr_len]u8,
+            repr: []const u8,
             const Self = @This();
 
             pub fn new(structure: T) Self {
                 return Self{
                     .inner = structure,
-                    .repr = rr,
+                    .repr = &rr,
                 };
             }
         };
@@ -327,6 +327,7 @@ pub const Value = struct {
     }
 
     /// Boolean value: 0 is false, 1 is true, any other value allowed by the marshalling format is invalid
+    /// It representation in the protocol is a `UINT32`
     pub fn Bool() type {
         return BasicType(bool);
     }
@@ -372,3 +373,57 @@ pub const Value = struct {
         return StringLike('g');
     }
 };
+
+test "Signature Generation test" {
+    const testing = std.testing;
+    const allocator = std.testing.allocator;
+    const eql = std.mem.eql;
+
+    const Speed = struct {
+        vel: f64,
+        acc: u64,
+        stopped: bool,
+    };
+
+    const Coord = struct {
+        x: f64,
+        y: f64,
+        speed: Speed,
+    };
+
+    const Tup = std.meta.Tuple(&[_]type{ i32, i32, f64 });
+
+    const a = Value.Bool().new(false);
+    testing.expect(eql(u8, a.repr, "b"));
+
+    const xs = Value.Array(i64).new(&[_]i64{ 1, 2, 3 });
+    testing.expect(eql(u8, xs.repr, "ax"));
+
+    const c = Value.Double().new(3.0);
+    testing.expect(eql(u8, c.repr, "d"));
+
+    const coord = Coord{
+        .x = 98,
+        .y = 199,
+        .speed = .{
+            .acc = 23,
+            .stopped = false,
+            .vel = 455,
+        },
+    };
+
+    const t = Value.Struct(Coord).new(coord);
+    testing.expect(eql(u8, t.repr, "(dd(dtb))"));
+
+    const cx = Value.Array(Coord).new(&[_]Coord{coord});
+    testing.expect(eql(u8, cx.repr, "a(dd(dtb))"));
+
+    const tup = Value.Tuple(Tup).new(.{ 4, 4, 4 });
+    testing.expect(eql(u8, tup.repr, "iid"));
+
+    const va = Value.Variant(Tup).new(.{ 4, 4, 4 });
+    testing.expect(eql(u8, va.repr, "v"));
+
+    const dico = Value.Dict(Value.Str, f64, std.StringHashMap(f64)).init(allocator);
+    testing.expect(eql(u8, dico.repr, "{sd}"));
+}
