@@ -188,6 +188,12 @@ pub const Value = union(ValueTag) {
                 }
                 len = 1;
             },
+            .Struct => |info| {
+                for (info.fields) |field| {
+                    len += reprLength(field.type);
+                }
+                len += 2;
+            },
             else => {
                 @compileError("connot get the signature length of this type");
             },
@@ -196,6 +202,7 @@ pub const Value = union(ValueTag) {
     }
 
     fn getRepr(comptime T: type, len: comptime_int, start: comptime_int, xs: *[len]u8) void {
+        var real_start = start;
         switch (@typeInfo(T)) {
             .ComptimeInt => {
                 @compileError("unable to evaluate the size of a comptime_int");
@@ -206,25 +213,25 @@ pub const Value = union(ValueTag) {
                         @compileError("if you want to create a boolean value, use a bool instead of i1");
                     },
                     8 => {
-                        xs[start] = switch (info.signedness) {
+                        xs[real_start] = switch (info.signedness) {
                             .unsigned => 'y',
                             else => @compileError("i8 is not part of the D-Bus data specification"),
                         };
                     },
                     16 => {
-                        xs[start] = switch (info.signedness) {
+                        xs[real_start] = switch (info.signedness) {
                             .unsigned => 'q',
                             .signed => 'n',
                         };
                     },
                     32 => {
-                        xs[start] = switch (info.signedness) {
+                        xs[real_start] = switch (info.signedness) {
                             .unsigned => 'u',
                             .signed => 'i',
                         };
                     },
                     64 => {
-                        xs[start] = switch (info.signedness) {
+                        xs[real_start] = switch (info.signedness) {
                             .unsigned => 't',
                             .signed => 'x',
                         };
@@ -235,10 +242,20 @@ pub const Value = union(ValueTag) {
                 }
             },
             .Float => {
-                xs[start] = 'd';
+                xs[real_start] = 'd';
             },
             .Bool => {
-                xs[start] = 'b';
+                xs[real_start] = 'b';
+            },
+            .Struct => |info| {
+                xs[real_start] = '(';
+                real_start += 1;
+                xs[len - 1] = ')';
+                for (info.fields) |field| {
+                    const ll = reprLength(field.type);
+                    getRepr(field.type, ll, 0, xs[real_start..(real_start + ll)]);
+                    real_start += ll;
+                }
             },
             else => {
                 @compileError("unable to create a signature for this type");
@@ -248,18 +265,21 @@ pub const Value = union(ValueTag) {
 
     pub fn Array(comptime T: type) type {
         const repr_len = reprLength(T);
+        var repr_arr = [_]u8{0} ** (repr_len + 1);
+        repr_arr[0] = 'a';
+        getRepr(T, repr_len + 1, 1, &repr_arr);
+
+        const rr = repr_arr;
+
         return struct {
             inner: []const T,
             repr: [repr_len + 1]u8,
             const Self = @This();
 
             pub fn new(xs: []const T) Self {
-                var repr_arr = [_]u8{0} ** (repr_len + 1);
-                repr_arr[0] = 'a';
-                getRepr(T, repr_len + 1, 1, &repr_arr);
                 return Self{
                     .inner = xs,
-                    .repr = repr_arr,
+                    .repr = rr,
                 };
             }
         };
@@ -277,23 +297,39 @@ pub const Value = union(ValueTag) {
     //     return .{ .variant = .{ .value = value } };
     // }
     //
-    // pub fn Struct(fields: []const *Value) Value {
-    //     return .{ .struc = .{ .fields = fields } };
-    // }
+    pub fn Struct(comptime S: type) type {
+        const repr_len = reprLength(S);
+        var repr_arr = [_]u8{0} ** (repr_len);
+        getRepr(S, repr_len, 0, &repr_arr);
+        const rr = repr_arr;
+        return struct {
+            inner: S,
+            repr: [repr_len]u8,
+            const Self = @This();
+
+            pub fn new(structure: S) Self {
+                return Self{
+                    .inner = structure,
+                    .repr = rr,
+                };
+            }
+        };
+    }
 
     fn BasicType(comptime T: type) type {
         const repr_len = reprLength(T);
+        var repr_arr = [_]u8{0} ** repr_len;
+        getRepr(T, repr_len, 0, &repr_arr);
+        const rr = repr_arr;
         return struct {
             value: T,
             repr: [repr_len]u8,
             const Self = @This();
 
             pub fn new(value: T) Self {
-                var repr_arr = [_]u8{0} ** repr_len;
-                getRepr(T, repr_len, 0, &repr_arr);
                 return Self{
                     .value = value,
-                    .repr = repr_arr,
+                    .repr = rr,
                 };
             }
         };
