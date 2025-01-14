@@ -2,6 +2,8 @@ const std = @import("std");
 
 /// Represent a dbus value
 pub const Value = struct {
+    pub const Str = [:0]const u8;
+
     fn reprLength(comptime T: type) comptime_int {
         var len = 0;
         switch (@typeInfo(T)) {
@@ -28,7 +30,13 @@ pub const Value = struct {
                 len += 1;
                 len += reprLength(info.child);
             },
+            .Pointer => |info| {
+                if (info.child == u8 and info.size == .Slice and info.is_const and info.is_allowzero == false) {
+                    len += 1;
+                }
+            },
             else => {
+                @compileLog(@typeInfo(T));
                 @compileError("connot get the signature length of this type");
             },
         }
@@ -97,6 +105,11 @@ pub const Value = struct {
                 xs[0] = 'a';
                 getRepr(info.child, (xs.len - 1), 0, xs[1..]);
             },
+            .Pointer => |info| {
+                if (info.child == u8 and info.size == .Slice and info.is_const and info.is_allowzero == false) {
+                    xs[real_start] = 's';
+                }
+            },
             else => {
                 @compileError("unable to create a signature for this type");
             },
@@ -161,8 +174,7 @@ pub const Value = struct {
     /// Entry in a dict or map (array of key-value pairs). Type code 101 'e' is
     /// reserved for use in bindings and implementations to represent the general
     /// concept of a dict or dict-entry, and must not appear in signatures used on D-Bus.
-    pub fn Dict(comptime K: type, comptime V: type) type {
-        const T = comptime std.AutoHashMap(K, V);
+    pub fn Dict(comptime K: type, comptime V: type, comptime M: type) type {
         const key_repr_len = reprLength(K);
         const value_repr_len = reprLength(V);
 
@@ -176,14 +188,21 @@ pub const Value = struct {
 
         const repr_arr = rr;
         return struct {
-            inner: T,
+            inner: M,
             repr: []const u8,
             const Self = @This();
 
             pub fn init(allocator: std.mem.Allocator) Self {
                 return Self{
                     .repr = &repr_arr,
-                    .inner = T.init(allocator),
+                    .inner = M.init(allocator),
+                };
+            }
+
+            pub fn new(inner: M) Self {
+                return Self{
+                    .repr = &repr_arr,
+                    .inner = inner,
                 };
             }
         };

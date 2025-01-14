@@ -55,6 +55,6 @@ pub fn main() !void {
     const va = Value.Variant(Tup).new(.{ 4, 4, 4 });
     std.debug.print("{s}\n", .{va.repr});
 
-    const dico = Value.Dict(i32, f64).init(allocator);
+    const dico = Value.Dict(Value.Str, f64, std.StringHashMap(f64)).init(allocator);
     std.debug.print("{s}\n", .{dico.repr});
 }
