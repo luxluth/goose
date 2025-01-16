@@ -12,7 +12,6 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.linkLibC();
-    exe.linkSystemLibrary("dbus-1");
 
     const run_cmd = b.addRunArtifact(exe);
 
@@ -34,8 +33,6 @@ pub fn build(b: *std.Build) void {
     });
 
     lib.linkLibC();
-    lib.linkSystemLibrary("dbus-1");
-
     b.installArtifact(lib);
 
     const lib_unit_tests = b.addTest(.{

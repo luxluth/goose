@@ -1,1 +1,3 @@
-# Goose: a zig dbus implementation
+# Goose
+
+_A zig dbus implementation_

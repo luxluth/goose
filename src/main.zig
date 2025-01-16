@@ -23,7 +23,6 @@ pub fn main() !void {
     std.log.info("Received: {s}", .{response});
 }
 
-// Function to extract the Unix socket path from the address
 fn extractUnixSocketPath(address: []const u8) ![]const u8 {
     const prefix = "unix:path=";
     if (!std.mem.startsWith(u8, address, prefix)) {
