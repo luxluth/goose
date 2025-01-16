@@ -1,5 +1,5 @@
 .{
-    .name = "dbus",
+    .name = "goose",
 
     .version = "0.0.0",
     .minimum_zig_version = "0.13.0",

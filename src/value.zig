@@ -270,7 +270,7 @@ pub const Value = struct {
     fn StringLike(r: u8) type {
         const repr_len = 1;
         return struct {
-            value: []const u8,
+            value: [:0]const u8,
             repr: []const u8,
             const Self = @This();
 
@@ -394,13 +394,13 @@ test "Signature Generation test" {
     const Tup = std.meta.Tuple(&[_]type{ i32, i32, f64 });
 
     const a = Value.Bool().new(false);
-    testing.expect(eql(u8, a.repr, "b"));
+    try testing.expect(eql(u8, a.repr, "b"));
 
     const xs = Value.Array(i64).new(&[_]i64{ 1, 2, 3 });
-    testing.expect(eql(u8, xs.repr, "ax"));
+    try testing.expect(eql(u8, xs.repr, "ax"));
 
     const c = Value.Double().new(3.0);
-    testing.expect(eql(u8, c.repr, "d"));
+    try testing.expect(eql(u8, c.repr, "d"));
 
     const coord = Coord{
         .x = 98,
@@ -413,17 +413,17 @@ test "Signature Generation test" {
     };
 
     const t = Value.Struct(Coord).new(coord);
-    testing.expect(eql(u8, t.repr, "(dd(dtb))"));
+    try testing.expect(eql(u8, t.repr, "(dd(dtb))"));
 
     const cx = Value.Array(Coord).new(&[_]Coord{coord});
-    testing.expect(eql(u8, cx.repr, "a(dd(dtb))"));
+    try testing.expect(eql(u8, cx.repr, "a(dd(dtb))"));
 
     const tup = Value.Tuple(Tup).new(.{ 4, 4, 4 });
-    testing.expect(eql(u8, tup.repr, "iid"));
+    try testing.expect(eql(u8, tup.repr, "iid"));
 
     const va = Value.Variant(Tup).new(.{ 4, 4, 4 });
-    testing.expect(eql(u8, va.repr, "v"));
+    try testing.expect(eql(u8, va.repr, "v"));
 
     const dico = Value.Dict(Value.Str, f64, std.StringHashMap(f64)).init(allocator);
-    testing.expect(eql(u8, dico.repr, "{sd}"));
+    try testing.expect(eql(u8, dico.repr, "{sd}"));
 }

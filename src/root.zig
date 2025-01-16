@@ -22,8 +22,6 @@ const DBusError = struct {
     padding1: ?*anyopaque, // nullable pointer for the placeholder padding
 };
 
-pub const TMethod = struct {};
-
 pub const Interface = struct {
     iface: [:0]const u8,
     properties: std.StringHashMap(Value),
@@ -35,7 +33,7 @@ pub const Interface = struct {
 
 pub const Object = struct {
     name: [:0]const u8,
-    conn: *DBusConnection,
+    conn: *Connection,
     interfaces: std.StringHashMap(Interface),
 
     // pub fn addMethod(_: *Object) !void {}
@@ -43,7 +41,7 @@ pub const Object = struct {
     pub fn createInterface(_: *Object, _: [:0]const u8) Interface {}
 };
 
-pub const DBusConnection = struct {
+pub const Connection = struct {
     handle: *c.DBusConnection,
     __name: ?[:0]const u8,
     __allocator: Allocator,
@@ -61,9 +59,9 @@ pub const DBusConnection = struct {
         UnableToCreateInterface,
     };
 
-    pub fn init(allocator: Allocator, bus_type: BusType) Error!DBusConnection {
+    pub fn init(allocator: Allocator, bus_type: BusType) Error!Connection {
         if (c.dbus_bus_get(@as(c.DBusBusType, @intFromEnum(bus_type)), null)) |conn| {
-            return DBusConnection{
+            return Connection{
                 .handle = conn,
                 .__name = null,
                 .__allocator = allocator,
@@ -73,7 +71,7 @@ pub const DBusConnection = struct {
         }
     }
 
-    pub fn requestName(self: *DBusConnection, well_known_name: [:0]const u8) Error!void {
+    pub fn requestName(self: *Connection, well_known_name: [:0]const u8) Error!void {
         const ret = c.dbus_bus_request_name(
             self.handle,
             well_known_name,
@@ -87,7 +85,7 @@ pub const DBusConnection = struct {
         self.__name = well_known_name;
     }
 
-    pub fn createObject(self: *DBusConnection, name: [:0]const u8) Object {
+    pub fn createObject(self: *Connection, name: [:0]const u8) Object {
         return Object{
             .name = name,
             .conn = self,
@@ -95,11 +93,11 @@ pub const DBusConnection = struct {
         };
     }
 
-    pub fn waitForMessage(self: *DBusConnection) Error!void {
+    pub fn waitForMessage(self: *Connection) Error!void {
         if (c.dbus_connection_read_write_dispatch(self.handle, -1) == 0) {
             return Error.DBusConnectionNotConnected;
         }
     }
 
-    pub fn deinit(_: *DBusConnection) void {}
+    pub fn deinit(_: *Connection) void {}
 };
