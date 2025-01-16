@@ -1,1 +1,1 @@
-# dbus.zig: DBus interface in zig
+# Goose: a zig dbus implementation
