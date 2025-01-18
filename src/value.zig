@@ -2,8 +2,6 @@ const std = @import("std");
 
 /// Represent a dbus value
 pub const Value = struct {
-    pub const Str = []const u8;
-
     fn reprLength(comptime T: type) comptime_int {
         var len = 0;
         switch (@typeInfo(T)) {
@@ -30,13 +28,10 @@ pub const Value = struct {
                 len = 1;
             },
             .Array => |info| {
-                len += 1;
-                len += reprLength(info.child);
+                len += 1 + reprLength(info.child);
             },
             .Pointer => |info| {
-                if (info.child == u8 and info.size == .Slice and info.is_const and info.is_allowzero == false) {
-                    len += 1;
-                }
+                len += 1 + reprLength(info.child);
             },
             else => {
                 @compileLog(@typeInfo(T));
@@ -109,9 +104,8 @@ pub const Value = struct {
                 getRepr(info.child, (xs.len - 1), 0, xs[1..]);
             },
             .Pointer => |info| {
-                if (info.child == u8 and info.size == .Slice and info.is_const and info.is_allowzero == false) {
-                    xs[real_start] = 's';
-                }
+                xs[0] = 'a';
+                getRepr(info.child, (xs.len - 1), 0, xs[1..]);
             },
             .Union => |_| {
                 xs[real_start] = 'v';
@@ -232,7 +226,7 @@ pub const Value = struct {
                     }
                 };
             },
-            else => @compileError("unexpected union as variant argument"),
+            else => @compileError("expected union as variant argument but found " ++ @typeName(T)),
         }
     }
 
