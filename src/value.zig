@@ -26,6 +26,9 @@ pub const Value = struct {
 
                 if (!info.is_tuple) len += 2;
             },
+            .Union => |_| {
+                len = 1;
+            },
             .Array => |info| {
                 len += 1;
                 len += reprLength(info.child);
@@ -109,6 +112,9 @@ pub const Value = struct {
                 if (info.child == u8 and info.size == .Slice and info.is_const and info.is_allowzero == false) {
                     xs[real_start] = 's';
                 }
+            },
+            .Union => |_| {
+                xs[real_start] = 'v';
             },
             else => {
                 @compileError("unable to create a signature for this type");
@@ -209,19 +215,25 @@ pub const Value = struct {
     }
 
     /// Variant type (the type of the value is part of the value itself)
+    /// Only unions are accepted
     pub fn Variant(comptime T: type) type {
-        return struct {
-            inner: T,
-            repr: []const u8,
-            const Self = @This();
+        switch (@typeInfo(T)) {
+            .Union => |_| {
+                return struct {
+                    inner: T,
+                    repr: []const u8,
+                    const Self = @This();
 
-            pub fn new(any: T) Self {
-                return Self{
-                    .inner = any,
-                    .repr = "v",
+                    pub fn new(any: T) Self {
+                        return Self{
+                            .inner = any,
+                            .repr = "v",
+                        };
+                    }
                 };
-            }
-        };
+            },
+            else => @compileError("unexpected union as variant argument"),
+        }
     }
 
     /// **Struct** type code 114 'r' is reserved for use in bindings and implementations
@@ -391,7 +403,12 @@ test "Signature Generation test" {
         speed: Speed,
     };
 
-    const Tup = std.meta.Tuple(&[_]type{ i32, i32, f64 });
+    const TTag = enum { oneValue, twoValue, threeValue };
+    const MulTup = union(TTag) {
+        oneValue: std.meta.Tuple(&[_]type{i32}),
+        twoValue: std.meta.Tuple(&[_]type{ i32, i32 }),
+        threeValue: std.meta.Tuple(&[_]type{ i32, i32, i32 }),
+    };
 
     const a = Value.Bool().new(false);
     try testing.expect(eql(u8, a.repr, "b"));
@@ -418,10 +435,10 @@ test "Signature Generation test" {
     const cx = Value.Array(Coord).new(&[_]Coord{coord});
     try testing.expect(eql(u8, cx.repr, "a(dd(dtb))"));
 
-    const tup = Value.Tuple(Tup).new(.{ 4, 4, 4 });
-    try testing.expect(eql(u8, tup.repr, "iid"));
+    const tup = Value.Tuple(std.meta.Tuple(&[_]type{ f64, f64, f64 })).new(.{ 4, 4, 4 });
+    try testing.expect(eql(u8, tup.repr, "ddd"));
 
-    const va = Value.Variant(Tup).new(.{ 4, 4, 4 });
+    const va = Value.Variant(MulTup).new(.{ .threeValue = .{ 4, 4, 4 } });
     try testing.expect(eql(u8, va.repr, "v"));
 
     const dico = Value.Dict(Value.Str, f64, std.StringHashMap(f64)).init(allocator);
