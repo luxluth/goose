@@ -5,13 +5,11 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseSafe });
 
     const exe = b.addExecutable(.{
-        .name = "dbus-test",
+        .name = "goose-test",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-
-    exe.linkLibC();
 
     const run_cmd = b.addRunArtifact(exe);
 
@@ -32,7 +30,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    lib.linkLibC();
     b.installArtifact(lib);
 
     const lib_unit_tests = b.addTest(.{

@@ -1,8 +1,8 @@
 pub const std = @import("std");
-pub const _value = @import("value.zig");
+pub const value = @import("value.zig");
 pub const convertInteger = @import("utils.zig").convertInteger;
 
-const Value = _value.Value;
+const Value = value.Value;
 const Allocator = std.mem.Allocator;
 
 pub const HeaderFieldValueTag = enum {
@@ -222,7 +222,7 @@ pub const MessageHeader = struct {
     ///  on an 8-byte boundary when storing the entire message in a single buffer.
     ///  If the header does not naturally end on an 8-byte boundary up to 7 bytes
     ///  of nul-initialized alignment padding must be added.
-    pub fn pack(self: MessageHeader, allocator: std.mem.Allocator) !std.ArrayList(u8).Slice {
+    pub fn pack(self: MessageHeader, allocator: std.mem.Allocator) !std.ArrayList(u8) {
         var buffer = std.ArrayList(u8).init(allocator);
         const endian = if (self.endianess == 'B') std.builtin.Endian.big else std.builtin.Endian.little;
         try buffer.append(self.endianess);
@@ -243,8 +243,25 @@ pub const MessageHeader = struct {
             try buffer.appendNTimes(0, padding_needed);
         }
 
-        return try buffer.toOwnedSlice();
+        return buffer;
     }
 };
 
-pub const Message = struct {};
+pub const Message = struct {
+    header: MessageHeader,
+    body: []const u8,
+
+    pub fn new(header: MessageHeader, body: []const u8) Message {
+        return Message{
+            .header = header,
+            .body = body,
+        };
+    }
+
+    pub fn pack(self: Message, allocator: std.mem.Allocator) !std.ArrayList(u8) {
+        var headerBytes = try self.header.pack(allocator);
+        try headerBytes.appendSlice(self.body);
+
+        return headerBytes;
+    }
+};
