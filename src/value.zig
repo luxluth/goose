@@ -127,7 +127,7 @@ pub const Value = struct {
 
         return struct {
             inner: []const T,
-            repr: []const u8,
+            repr: [:0]const u8,
             const Self = @This();
 
             pub fn new(xs: []const T) Self {
@@ -159,7 +159,7 @@ pub const Value = struct {
         const rr = repr_arr;
         return struct {
             inner: T,
-            repr: []const u8,
+            repr: [:0]const u8,
             const Self = @This();
 
             pub fn new(structure: T) Self {
@@ -189,7 +189,7 @@ pub const Value = struct {
         const repr_arr = rr;
         return struct {
             inner: M,
-            repr: []const u8,
+            repr: [:0]const u8,
             const Self = @This();
 
             pub fn init(allocator: std.mem.Allocator) Self {
@@ -215,7 +215,7 @@ pub const Value = struct {
             .Union => |_| {
                 return struct {
                     inner: T,
-                    repr: []const u8,
+                    repr: [:0]const u8,
                     const Self = @This();
 
                     pub fn new(any: T) Self {
@@ -242,7 +242,7 @@ pub const Value = struct {
         const rr = repr_arr;
         return struct {
             inner: S,
-            repr: []const u8,
+            repr: [:0]const u8,
             const Self = @This();
 
             pub fn new(structure: S) Self {
@@ -261,7 +261,7 @@ pub const Value = struct {
         const rr = repr_arr;
         return struct {
             value: T,
-            repr: []const u8,
+            repr: [:0]const u8,
             const Self = @This();
 
             pub fn new(value: T) Self {
@@ -277,7 +277,7 @@ pub const Value = struct {
         const repr_len = 1;
         return struct {
             value: [:0]const u8,
-            repr: []const u8,
+            repr: [:0]const u8,
             const Self = @This();
 
             pub fn new(value: [:0]const u8) Self {
@@ -344,7 +344,7 @@ pub const Value = struct {
         const repr_len = reprLength(u32);
         return struct {
             handle: u32,
-            repr: []const u8,
+            repr: [:0]const u8,
             const Self = @This();
 
             pub fn new(handle: u32) Self {

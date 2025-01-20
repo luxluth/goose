@@ -3,11 +3,13 @@ const net = std.net;
 pub const core = @import("core.zig");
 const Value = @import("value.zig").Value;
 const rand = std.crypto.random;
+const convertInteger = @import("utils.zig").convertInteger;
 
 pub const Connection = struct {
     __inner_sock: net.Stream,
+    __allocator: std.mem.Allocator,
 
-    pub fn new() !Connection {
+    pub fn init(allocator: std.mem.Allocator) !Connection {
         const bus_address = std.posix.getenv("DBUS_SESSION_BUS_ADDRESS") orelse
             return error.EnvVarNotFound;
 
@@ -17,14 +19,15 @@ pub const Connection = struct {
 
         return Connection{
             .__inner_sock = socket,
+            .__allocator = allocator,
         };
     }
 
+    /// This function closes the underlined socket
     pub fn close(self: *Connection) void {
         self.__inner_sock.close();
     }
 
-    const requestNameArgs = std.meta.Tuple(&[_]type{ [:0]const u8, u32 });
     const RequestNameFlags = enum(u32) {
         None = 0,
         AllowReplacement = 1,
@@ -32,32 +35,41 @@ pub const Connection = struct {
         DoNotQueue = 4,
     };
 
-    pub fn requestName(_: *Connection, name: [:0]const u8) !void {
-        const allocator = std.heap.page_allocator;
+    pub fn requestName(self: *Connection, name: [:0]const u8) !void {
         const serial = rand.int(u32);
+
+        var body_arr = std.ArrayList(u8).init(self.__allocator);
+        defer body_arr.deinit();
+
+        try body_arr.appendSlice(name);
+        const flag = convertInteger(u32, @intFromEnum(RequestNameFlags.DoNotQueue), .big);
+        try body_arr.appendSlice(&flag);
+
         const header = core.MessageHeader{
             .message_type = @intFromEnum(core.MessageType.MethodCall),
             .flags = @intFromEnum(core.MessageFlag.NoAutoStart),
             .proto_version = 1,
-            .body_length = 0,
+            .body_length = @intCast(body_arr.items.len),
             .serial = serial,
-            .header_fields = @constCast(&[_]core.HeaderField{}),
+            .header_fields = @constCast(&[_]core.HeaderField{
+                .{ .code = @intFromEnum(core.HeaderFieldCode.ReplySerial), .value = .{ .ReplySerial = serial } },
+                .{ .code = @intFromEnum(core.HeaderFieldCode.Member), .value = .{ .Member = "RequestName" } },
+                .{ .code = @intFromEnum(core.HeaderFieldCode.Signature), .value = .{ .Signature = "su" } },
+                .{ .code = @intFromEnum(core.HeaderFieldCode.Destination), .value = .{ .Signature = "org.freedesktop.DBus" } },
+            }),
         };
 
-        const inner = Value.Tuple(requestNameArgs).new(requestNameArgs{ name, @intFromEnum(RequestNameFlags.DoNotQueue) }).inner;
-        std.debug.print("{any}", .{inner});
-        const body = std.mem.toBytes(inner);
-
-        const message = core.Message.new(header, &body);
-        const bytes = try message.pack(allocator);
+        const message = core.Message.new(header, body_arr.items);
+        const bytes = try message.pack(self.__allocator);
         defer bytes.deinit();
-
-        std.debug.print("{any}\n", .{message});
-        std.debug.print("{any}\n", .{bytes.items});
+        try self.sendBytesAndWaitForAnswer(bytes.items, serial);
     }
 
     fn sendBytesAndWaitForAnswer(self: *Connection, data: []u8, _: u32) !void {
-        self.__inner_sock.writeAll(data);
+        try self.__inner_sock.writeAll(data);
+        const reader = self.__inner_sock.reader();
+        const endian = try reader.readAllAlloc(self.__allocator, 512);
+        std.debug.print("{c}", .{endian[0]});
     }
 };
 
