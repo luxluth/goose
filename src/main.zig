@@ -4,6 +4,8 @@ const std = @import("std");
 // const Value = @import("./value.zig").Value;
 
 const goose = @import("root.zig");
+const core = @import("root.zig").core;
+const Value = core.value.Value;
 const Connection = goose.Connection;
 
 pub fn main() !void {
@@ -11,8 +13,16 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var conn = try Connection.init(allocator);
-    defer conn.close();
+    var arr = std.ArrayList(u8).init(allocator);
+    defer arr.deinit();
 
-    try conn.requestName("dev.goose.zig");
+    try Value.String().new("Hello world").ser(&arr);
+    std.debug.print("{any}\n", .{arr.items});
+    try Value.Bool().new(false).ser(&arr);
+    std.debug.print("{any}\n", .{arr.items});
+
+    // var conn = try Connection.init(allocator);
+    // defer conn.close();
+    //
+    // try conn.requestName("dev.goose.zig");
 }

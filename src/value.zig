@@ -1,4 +1,5 @@
 const std = @import("std");
+const convertIntegrer = @import("utils.zig").convertInteger;
 
 /// Represent a dbus value
 pub const Value = struct {
@@ -127,7 +128,7 @@ pub const Value = struct {
 
         return struct {
             inner: []const T,
-            repr: [:0]const u8,
+            repr: []const u8,
             const Self = @This();
 
             pub fn new(xs: []const T) Self {
@@ -159,7 +160,7 @@ pub const Value = struct {
         const rr = repr_arr;
         return struct {
             inner: T,
-            repr: [:0]const u8,
+            repr: []const u8,
             const Self = @This();
 
             pub fn new(structure: T) Self {
@@ -189,7 +190,7 @@ pub const Value = struct {
         const repr_arr = rr;
         return struct {
             inner: M,
-            repr: [:0]const u8,
+            repr: []const u8,
             const Self = @This();
 
             pub fn init(allocator: std.mem.Allocator) Self {
@@ -242,7 +243,7 @@ pub const Value = struct {
         const rr = repr_arr;
         return struct {
             inner: S,
-            repr: [:0]const u8,
+            repr: []const u8,
             const Self = @This();
 
             pub fn new(structure: S) Self {
@@ -261,7 +262,7 @@ pub const Value = struct {
         const rr = repr_arr;
         return struct {
             value: T,
-            repr: [:0]const u8,
+            repr: []const u8,
             const Self = @This();
 
             pub fn new(value: T) Self {
@@ -270,6 +271,18 @@ pub const Value = struct {
                     .repr = &rr,
                 };
             }
+
+            pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {
+                switch (@typeInfo(T)) {
+                    .Int => {
+                        const slice = convertIntegrer(T, self.value, .big);
+                        try list.appendSlice(&slice);
+                    },
+                    else => {
+                        try list.appendSlice(&std.mem.toBytes(self.value));
+                    },
+                }
+            }
         };
     }
 
@@ -277,7 +290,7 @@ pub const Value = struct {
         const repr_len = 1;
         return struct {
             value: [:0]const u8,
-            repr: [:0]const u8,
+            repr: []const u8,
             const Self = @This();
 
             pub fn new(value: [:0]const u8) Self {
@@ -285,8 +298,31 @@ pub const Value = struct {
                 repr_arr[0] = r;
                 return Self{
                     .value = value,
-                    .repr = repr_arr,
+                    .repr = &repr_arr,
                 };
+            }
+
+            pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {
+                const len: u32 = @intCast(self.value.len);
+                switch (r) {
+                    's' => {
+                        try list.appendSlice(&convertIntegrer(u32, len, .big));
+                        try list.appendSlice(self.value);
+                        try list.append(0);
+                    },
+                    'o' => {
+                        // TODO: check if is valid object path
+                        try list.appendSlice(&convertIntegrer(u32, len, .big));
+                        try list.appendSlice(self.value);
+                        try list.append(0);
+                    },
+                    'g' => {
+                        try list.append(@as(u8, len));
+                        try list.appendSlice(self.value);
+                        try list.append(0);
+                    },
+                    else => unreachable,
+                }
             }
         };
     }
@@ -335,7 +371,27 @@ pub const Value = struct {
     /// Boolean value: 0 is false, 1 is true, any other value allowed by the marshalling format is invalid
     /// It representation in the protocol is a `UINT32`
     pub fn Bool() type {
-        return BasicType(bool);
+        const repr_len = reprLength(bool);
+        var repr_arr = [_]u8{0} ** repr_len;
+        getRepr(bool, repr_len, 0, &repr_arr);
+        const rr = repr_arr;
+        return struct {
+            value: bool,
+            repr: []const u8,
+            const Self = @This();
+
+            pub fn new(value: bool) Self {
+                return Self{
+                    .value = value,
+                    .repr = &rr,
+                };
+            }
+
+            pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {
+                const x: u32 = @intFromBool(self.value);
+                try list.appendSlice(&convertIntegrer(u32, x, .big));
+            }
+        };
     }
 
     /// Unsigned 32-bit integer representing an index into an out-of-band array of
@@ -344,7 +400,7 @@ pub const Value = struct {
         const repr_len = reprLength(u32);
         return struct {
             handle: u32,
-            repr: [:0]const u8,
+            repr: []const u8,
             const Self = @This();
 
             pub fn new(handle: u32) Self {
@@ -352,7 +408,7 @@ pub const Value = struct {
                 repr_arr[0] = 'h';
                 return Self{
                     .handle = handle,
-                    .repr = repr_arr,
+                    .repr = &repr_arr,
                 };
             }
         };
@@ -435,6 +491,6 @@ test "Signature Generation test" {
     const va = Value.Variant(MulTup).new(.{ .threeValue = .{ 4, 4, 4 } });
     try testing.expect(eql(u8, va.repr, "v"));
 
-    const dico = Value.Dict(Value.Str, f64, std.StringHashMap(f64)).init(allocator);
+    const dico = Value.Dict([:0]const u8, f64, std.StringHashMap(f64)).init(allocator);
     try testing.expect(eql(u8, dico.repr, "{sd}"));
 }
