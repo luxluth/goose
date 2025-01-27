@@ -65,8 +65,9 @@ pub const Connection = struct {
         try self.sendBytesAndWaitForAnswer(bytes.items, serial);
     }
 
-    fn sendBytesAndWaitForAnswer(self: *Connection, data: []u8, _: u32) !void {
+    fn sendBytesAndWaitForAnswer(self: *Connection, data: []u8, serial: u32) !void {
         try self.__inner_sock.writeAll(data);
+        std.debug.print("[:{d}:SEND] -> {d} o\n", .{ serial, data.len });
         const reader = self.__inner_sock.reader();
         const endian = try reader.readAllAlloc(self.__allocator, 512);
         std.debug.print("{c}", .{endian[0]});

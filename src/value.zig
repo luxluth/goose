@@ -140,7 +140,7 @@ pub const Value = struct {
         };
     }
 
-    /// Tuple is a set of element. The order of appearance is important
+    /// Tuple is a set of element. The order of is important
     /// `ivv` -> `INT32` `VARIANT` `VARIANT`
     pub fn Tuple(comptime T: type) type {
         switch (@typeInfo(T)) {
@@ -172,6 +172,7 @@ pub const Value = struct {
         };
     }
 
+    /// **CONTAINER**
     /// Entry in a dict or map (array of key-value pairs). Type code 101 'e' is
     /// reserved for use in bindings and implementations to represent the general
     /// concept of a dict or dict-entry, and must not appear in signatures used on D-Bus.
@@ -209,6 +210,7 @@ pub const Value = struct {
         };
     }
 
+    /// **CONTAINER**
     /// Variant type (the type of the value is part of the value itself)
     /// Only unions are accepted
     pub fn Variant(comptime T: type) type {
@@ -231,6 +233,7 @@ pub const Value = struct {
         }
     }
 
+    /// **CONTAINER**
     /// **Struct** type code 114 'r' is reserved for use in bindings and implementations
     /// to represent the general concept of a struct, and must not appear in signatures used on D-Bus.
     pub fn Struct(comptime S: type) type {
@@ -317,7 +320,7 @@ pub const Value = struct {
                         try list.append(0);
                     },
                     'g' => {
-                        try list.append(@as(u8, len));
+                        try list.append(@as(u8, @truncate(len)));
                         try list.appendSlice(self.value);
                         try list.append(0);
                     },

@@ -87,20 +87,30 @@ pub const HeaderFieldValue = union(HeaderFieldValueTag) {
     Signature: [:0]const u8,
     UnixFds: u32,
 
-    pub fn serialize(self: HeaderFieldValue, endianess: std.builtin.Endian) []const u8 {
+    pub fn serialize(self: HeaderFieldValue, buffer: *std.ArrayList(u8)) !void {
+        const Sig = Value.Signature();
+        const Str = Value.String();
+        const Path = Value.ObjectPath();
+        const U32 = Value.Uint32();
+
         switch (self) {
             .UnixFds, .ReplySerial => |x| {
-                return &convertInteger(u32, x, endianess);
+                try U32.new(x).ser(buffer);
             },
-            .Path,
+            .Path => |v| {
+                try Path.new(v).ser(buffer);
+            },
             .Interface,
             .Member,
             .ErrorName,
             .Destination,
             .Sender,
+            => |v| {
+                try Str.new(v).ser(buffer);
+            },
             .Signature,
-            => |e| {
-                return @constCast(@ptrCast(e));
+            => |v| {
+                try Sig.new(v).ser(buffer);
             },
         }
     }
@@ -223,18 +233,22 @@ pub const MessageHeader = struct {
     ///  If the header does not naturally end on an 8-byte boundary up to 7 bytes
     ///  of nul-initialized alignment padding must be added.
     pub fn pack(self: MessageHeader, allocator: std.mem.Allocator) !std.ArrayList(u8) {
+        const Byte = Value.Byte();
+        const U32 = Value.Uint32();
+
         var buffer = std.ArrayList(u8).init(allocator);
-        const endian = if (self.endianess == 'B') std.builtin.Endian.big else std.builtin.Endian.little;
-        try buffer.append(self.endianess);
-        try buffer.append(self.message_type);
-        try buffer.append(self.flags);
-        try buffer.append(self.proto_version);
-        try buffer.appendSlice(&convertInteger(u32, self.body_length, endian));
-        try buffer.appendSlice(&convertInteger(u32, self.serial, endian));
+
+        try Byte.new(self.endianess).ser(&buffer);
+        try Byte.new(self.message_type).ser(&buffer);
+        try Byte.new(self.flags).ser(&buffer);
+        try Byte.new(self.proto_version).ser(&buffer);
+
+        try U32.new(self.body_length).ser(&buffer); // Only big endian for now
+        try U32.new(self.serial).ser(&buffer);
 
         for (self.header_fields) |field| {
             try buffer.append(field.code);
-            try buffer.appendSlice(field.value.serialize(endian));
+            try field.value.serialize(&buffer);
         }
 
         const header_length = buffer.items.len;
