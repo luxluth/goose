@@ -4,26 +4,13 @@ const std = @import("std");
 // const Value = @import("./value.zig").Value;
 
 const goose = @import("root.zig");
-// const core = @import("root.zig").core;
-// const Value = core.value.Value;
+const core = @import("root.zig").core;
+const Value = core.value.Value;
 // const Connection = goose.Connection;
-const T = goose.core.HeaderFieldValue;
-
-fn fields(comptime S: type) std.builtin.Type.StructField {
-    if (std.meta.hasMethod(S, "ser")) {
-        const Args = std.meta.ArgsTuple(@TypeOf(S.ser));
-        const fx_ = std.meta.fields(Args);
-        if (fx_.len == 2)
-            return fx_[1];
-    } else {
-        @compileError("iiiiiiiiiiii");
-    }
-}
-
-const fx = fields(T);
 
 pub fn main() !void {
-    std.debug.print("{any}\n", .{fx});
+    const V = Value.Variant(core.HeaderFieldValue);
+    std.debug.print("{any}", .{V});
     // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     // const allocator = gpa.allocator();
     // defer _ = gpa.deinit();

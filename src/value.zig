@@ -1,10 +1,53 @@
 const std = @import("std");
 const convertIntegrer = @import("utils.zig").convertInteger;
 
+// String wrapper
+pub const GStr = struct {
+    s: [:0]const u8,
+    pub fn new(s: [:0]const u8) @This() {
+        return .{ .s = s };
+    }
+};
+
+// ObjectPath wrapper
+pub const GPath = struct {
+    s: [:0]const u8,
+    pub fn new(s: [:0]const u8) @This() {
+        return .{ .s = s };
+    }
+};
+
+// Signature wrapper
+pub const GSig = struct {
+    s: [:0]const u8,
+    pub fn new(s: [:0]const u8) @This() {
+        return .{ .s = s };
+    }
+};
+
+// Unix fd wrapper
+pub const GUFd = struct {
+    fd: u32,
+    pub fn new(fd: u32) @This() {
+        return .{ .fd = fd };
+    }
+};
+
 /// Represent a dbus value
 pub const Value = struct {
+    fn doesImplementSer(comptime T: type) bool {
+        if (std.meta.hasMethod(T, "ser")) {
+            const Args = std.meta.ArgsTuple(@TypeOf(T.ser));
+            const fx = std.meta.fields(Args);
+            return (fx.len == 2 and fx[0].type == T and fx[1].type == *std.ArrayList(u8));
+        }
+
+        return false;
+    }
+
     fn reprLength(comptime T: type) comptime_int {
         var len = 0;
+        if (T == GStr or T == GPath or T == GSig or T == GUFd) return 1;
         switch (@typeInfo(T)) {
             .Int => |_| {
                 len = 1;
@@ -44,6 +87,21 @@ pub const Value = struct {
 
     fn getRepr(comptime T: type, len: comptime_int, start: comptime_int, xs: *[len]u8) void {
         var real_start = start;
+
+        if (T == GStr) {
+            xs[real_start] = 's';
+            return;
+        } else if (T == GPath) {
+            xs[real_start] = 'o';
+            return;
+        } else if (T == GSig) {
+            xs[real_start] = 'g';
+            return;
+        } else if (T == GUFd) {
+            xs[real_start] = 'h';
+            return;
+        }
+
         switch (@typeInfo(T)) {
             .ComptimeInt => {
                 @compileError("unable to evaluate the size of a comptime_int");
@@ -138,7 +196,20 @@ pub const Value = struct {
                 };
             }
 
-            // pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {}
+            pub fn ser(self: Self, buffer: *std.ArrayList(u8)) !void {
+                const array_data_length = @sizeOf(T) * self.inner.len;
+                if (array_data_length > std.math.pow(u32, 2, 26))
+                    return error.ArraySizeExceeded;
+                const alignment = @alignOf(T);
+                const padded_length = alignUp(array_data_length, alignment);
+                const new_array = try buffer.addManyAsSlice(@sizeOf(u32) + padded_length);
+                const len = new_array[0..4];
+                len.* = &convertIntegrer(u32, array_data_length, .big);
+            }
+
+            fn alignUp(value: usize, alignment: usize) usize {
+                return (value + alignment - 1) & ~(alignment - 1);
+            }
         };
     }
 
@@ -218,24 +289,24 @@ pub const Value = struct {
     pub fn Variant(comptime T: type) type {
         switch (@typeInfo(T)) {
             .Union => |_| {
+                if (!doesImplementSer(T)) {
+                    @compileError("pub fn ser(" ++ @typeName(T) ++ ", *std.ArrayList(u8)) !void --- not found on " ++ @typeName(T) ++ " union.");
+                }
                 return struct {
                     inner: T,
                     repr: [:0]const u8,
                     const Self = @This();
 
-                    // pub fn new(any: T) Self {
-                    //     if (@hasDecl(T, "ser")) {
-                    //         const signature = std.meta.ArgsTuple(T.ser);
-                    //     } else {
-                    //         @compileError("No serialize method found on " ++ @typeName(T) ++ " union");
-                    //     }
-                    //     return Self{
-                    //         .inner = any,
-                    //         .repr = "v",
-                    //     };
-                    // }
-                    //
-                    // pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {}
+                    pub fn new(any: T) Self {
+                        return Self{
+                            .inner = any,
+                            .repr = "v",
+                        };
+                    }
+
+                    pub fn ser(self: Self, buffer: *std.ArrayList(u8)) !void {
+                        try self.inner.ser(buffer);
+                    }
                 };
             },
             else => @compileError("expected union as variant argument but found " ++ @typeName(T)),
@@ -450,6 +521,59 @@ pub const Value = struct {
     /// _Validity constraints_: Zero or more [single complete types](https://dbus.freedesktop.org/doc/dbus-specification.html#term-single-complete-type)
     pub fn Signature() type {
         return StringLike('g');
+    }
+};
+
+pub const Serializer = struct {
+    fn trySerialize(comptime T: type, data: T, buffer: *std.ArrayList(u8)) !void {
+        if (T == GStr) {
+            try Value.String().new(data).ser(buffer);
+        } else if (T == GPath) {
+            try Value.ObjectPath().new(data).ser(buffer);
+        } else if (T == GSig) {
+            try Value.Signature().new(data).ser(buffer);
+        } else if (T == GUFd) {
+            try Value.UnixFd().new(data).ser(buffer);
+        } else {
+            switch (@typeInfo(T)) {
+                .Int => |info| {
+                    if (info.bits == 16) {
+                        if (info.signedness == .signed) {
+                            try Value.Int16().new(data).ser(buffer);
+                        } else {
+                            try Value.Uint16().new(data).ser(buffer);
+                        }
+                    } else if (info.bits == 32) {
+                        if (info.signedness == .signed) {
+                            try Value.Int32().new(data).ser(buffer);
+                        } else {
+                            try Value.Uint32().new(data).ser(buffer);
+                        }
+                    } else if (info.bits == 64) {
+                        if (info.signedness == .signed) {
+                            try Value.Int64().new(data).ser(buffer);
+                        } else {
+                            try Value.Uint64().new(data).ser(buffer);
+                        }
+                    } else if (info.bits == 8) {
+                        if (info.signedness == .unsigned) {
+                            try Value.Byte().new(data).ser(buffer);
+                        } else {
+                            return error.I8CannotBeSerialized;
+                        }
+                    }
+                },
+                .Float => |info| {
+                    if (info.bits != 64) {
+                        return error.F32CannotBeSerialized;
+                    }
+                    try Value.Double().new(data).ser(buffer);
+                },
+                .Bool => {
+                    try Value.Bool().new(data).ser(buffer);
+                },
+            }
+        }
     }
 };
 
