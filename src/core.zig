@@ -149,6 +149,7 @@ pub const MessageType = enum(u8) {
 };
 
 pub const MessageFlag = enum(u8) {
+    __EMPTY = 0x0,
     /// This message does not expect method return replies or error replies,
     /// even if it is of a type that can have a reply; the reply should be omitted.
     /// Note that `METHOD_CALL` is the only message type currently defined in

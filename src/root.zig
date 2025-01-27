@@ -8,6 +8,7 @@ const convertInteger = @import("utils.zig").convertInteger;
 pub const Connection = struct {
     __inner_sock: net.Stream,
     __allocator: std.mem.Allocator,
+    serial_counter: u32,
 
     pub fn init(allocator: std.mem.Allocator) !Connection {
         const bus_address = std.posix.getenv("DBUS_SESSION_BUS_ADDRESS") orelse
@@ -20,6 +21,7 @@ pub const Connection = struct {
         return Connection{
             .__inner_sock = socket,
             .__allocator = allocator,
+            .serial_counter = 1,
         };
     }
 
@@ -36,26 +38,28 @@ pub const Connection = struct {
     };
 
     pub fn requestName(self: *Connection, name: [:0]const u8) !void {
-        const serial = rand.int(u32);
-
+        const Str = Value.String();
+        const U32 = Value.Uint32();
+        const serial = self.serial_counter;
+        defer self.serial_counter += 1;
         var body_arr = std.ArrayList(u8).init(self.__allocator);
         defer body_arr.deinit();
 
-        try body_arr.appendSlice(name);
-        const flag = convertInteger(u32, @intFromEnum(RequestNameFlags.DoNotQueue), .big);
-        try body_arr.appendSlice(&flag);
+        try Str.new(name).ser(&body_arr);
+        try U32.new(@intFromEnum(RequestNameFlags.DoNotQueue) | @intFromEnum(RequestNameFlags.ReplaceExisting)).ser(&body_arr);
 
         const header = core.MessageHeader{
             .message_type = @intFromEnum(core.MessageType.MethodCall),
-            .flags = @intFromEnum(core.MessageFlag.NoAutoStart),
+            .flags = @intFromEnum(core.MessageFlag.__EMPTY),
             .proto_version = 1,
             .body_length = @intCast(body_arr.items.len),
             .serial = serial,
             .header_fields = @constCast(&[_]core.HeaderField{
-                .{ .code = @intFromEnum(core.HeaderFieldCode.ReplySerial), .value = .{ .ReplySerial = serial } },
+                .{ .code = @intFromEnum(core.HeaderFieldCode.Destination), .value = .{ .Destination = "org.freedesktop.DBus" } },
+                .{ .code = @intFromEnum(core.HeaderFieldCode.Path), .value = .{ .Path = "/org/freedesktop/DBus" } },
+                .{ .code = @intFromEnum(core.HeaderFieldCode.Interface), .value = .{ .Interface = "org.freedesktop.DBus" } },
                 .{ .code = @intFromEnum(core.HeaderFieldCode.Member), .value = .{ .Member = "RequestName" } },
-                .{ .code = @intFromEnum(core.HeaderFieldCode.Signature), .value = .{ .Signature = "su" } },
-                .{ .code = @intFromEnum(core.HeaderFieldCode.Destination), .value = .{ .Signature = "org.freedesktop.DBus" } },
+                .{ .code = @intFromEnum(core.HeaderFieldCode.ReplySerial), .value = .{ .ReplySerial = serial } },
             }),
         };
 
@@ -75,6 +79,7 @@ pub const Connection = struct {
 };
 
 fn extractUnixSocketPath(address: []const u8) ![]const u8 {
+    // NOTE: system socket path = /var/run/dbus/system_bus_socket
     const prefix = "unix:path=";
     if (!std.mem.startsWith(u8, address, prefix)) {
         return error.InvalidAddressFormat;
