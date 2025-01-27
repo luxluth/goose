@@ -137,6 +137,8 @@ pub const Value = struct {
                     .repr = &rr,
                 };
             }
+
+            // pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {}
         };
     }
 
@@ -221,12 +223,19 @@ pub const Value = struct {
                     repr: [:0]const u8,
                     const Self = @This();
 
-                    pub fn new(any: T) Self {
-                        return Self{
-                            .inner = any,
-                            .repr = "v",
-                        };
-                    }
+                    // pub fn new(any: T) Self {
+                    //     if (@hasDecl(T, "ser")) {
+                    //         const signature = std.meta.ArgsTuple(T.ser);
+                    //     } else {
+                    //         @compileError("No serialize method found on " ++ @typeName(T) ++ " union");
+                    //     }
+                    //     return Self{
+                    //         .inner = any,
+                    //         .repr = "v",
+                    //     };
+                    // }
+                    //
+                    // pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {}
                 };
             },
             else => @compileError("expected union as variant argument but found " ++ @typeName(T)),
@@ -413,6 +422,11 @@ pub const Value = struct {
                     .handle = handle,
                     .repr = &repr_arr,
                 };
+            }
+
+            pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {
+                const slice = convertIntegrer(u32, self.value, .big);
+                try list.appendSlice(&slice);
             }
         };
     }

@@ -87,7 +87,7 @@ pub const HeaderFieldValue = union(HeaderFieldValueTag) {
     Signature: [:0]const u8,
     UnixFds: u32,
 
-    pub fn serialize(self: HeaderFieldValue, buffer: *std.ArrayList(u8)) !void {
+    pub fn ser(self: HeaderFieldValue, buffer: *std.ArrayList(u8)) !void {
         const Sig = Value.Signature();
         const Str = Value.String();
         const Path = Value.ObjectPath();
@@ -249,7 +249,7 @@ pub const MessageHeader = struct {
 
         for (self.header_fields) |field| {
             try buffer.append(field.code);
-            try field.value.serialize(&buffer);
+            try field.value.ser(&buffer);
         }
 
         const header_length = buffer.items.len;
