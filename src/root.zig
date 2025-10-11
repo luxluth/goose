@@ -10,6 +10,25 @@ pub const Connection = struct {
     __allocator: std.mem.Allocator,
     serial_counter: u32,
 
+    fn auth(socket: net.Stream) !void {
+        var reader_buffer: [2048]u8 = undefined;
+        var reader = socket.reader(&reader_buffer);
+        const io_reader = &reader.interface_state;
+
+        var writer_buffer: [2048]u8 = undefined;
+        var writer = socket.writer(&writer_buffer);
+        var io_writer = &writer.interface;
+
+        try io_writer.writeByte(0);
+        try io_writer.print("AUTH EXTERNAL 31303031\r\n", .{});
+        try io_writer.flush();
+
+        const response = try io_reader.takeDelimiterInclusive('\n');
+        if (!std.mem.startsWith(u8, response, "OK")) {
+            return error.HandShakeFail;
+        }
+    }
+
     pub fn init(allocator: std.mem.Allocator) !Connection {
         const bus_address = std.posix.getenv("DBUS_SESSION_BUS_ADDRESS") orelse
             return error.EnvVarNotFound;
@@ -17,6 +36,8 @@ pub const Connection = struct {
         const socket_path = try extractUnixSocketPath(bus_address);
         const socket = try net.connectUnixSocket(socket_path);
         std.log.debug(":: Connected to D-Bus at: {s}", .{socket_path});
+
+        try auth(socket);
 
         return Connection{
             .__inner_sock = socket,
