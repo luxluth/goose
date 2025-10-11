@@ -49,32 +49,32 @@ pub const Value = struct {
         var len = 0;
         if (T == GStr or T == GPath or T == GSig or T == GUFd) return 1;
         switch (@typeInfo(T)) {
-            .Int => |_| {
+            .int => |_| {
                 len = 1;
             },
-            .Bool => {
+            .bool => {
                 len = 1;
             },
-            .Float => |info| {
+            .float => |info| {
                 if (info.bits != 64) {
                     @compileError("Only f64 are legible for the D-Bus data specification");
                 }
                 len = 1;
             },
-            .Struct => |info| {
+            .@"struct" => |info| {
                 for (info.fields) |field| {
                     len += reprLength(field.type);
                 }
 
                 if (!info.is_tuple) len += 2;
             },
-            .Union => |_| {
+            .@"union" => |_| {
                 len = 1;
             },
-            .Array => |info| {
+            .array => |info| {
                 len += 1 + reprLength(info.child);
             },
-            .Pointer => |info| {
+            .pointer => |info| {
                 len += 1 + reprLength(info.child);
             },
             else => {
@@ -103,10 +103,10 @@ pub const Value = struct {
         }
 
         switch (@typeInfo(T)) {
-            .ComptimeInt => {
+            .comptime_int => {
                 @compileError("unable to evaluate the size of a comptime_int");
             },
-            .Int => |info| {
+            .int => |info| {
                 switch (info.bits) {
                     1 => {
                         @compileError("if you want to create a boolean value, use a bool instead of i1");
@@ -140,13 +140,13 @@ pub const Value = struct {
                     },
                 }
             },
-            .Float => {
+            .float => {
                 xs[real_start] = 'd';
             },
-            .Bool => {
+            .bool => {
                 xs[real_start] = 'b';
             },
-            .Struct => |info| {
+            .@"struct" => |info| {
                 if (!info.is_tuple) {
                     xs[real_start] = '(';
                     real_start += 1;
@@ -158,15 +158,15 @@ pub const Value = struct {
                     real_start += ll;
                 }
             },
-            .Array => |info| {
+            .array => |info| {
                 xs[0] = 'a';
                 getRepr(info.child, (xs.len - 1), 0, xs[1..]);
             },
-            .Pointer => |info| {
+            .pointer => |info| {
                 xs[0] = 'a';
                 getRepr(info.child, (xs.len - 1), 0, xs[1..]);
             },
-            .Union => |_| {
+            .@"union" => |_| {
                 xs[real_start] = 'v';
             },
             else => {
@@ -217,7 +217,7 @@ pub const Value = struct {
     /// `ivv` -> `INT32` `VARIANT` `VARIANT`
     pub fn Tuple(comptime T: type) type {
         switch (@typeInfo(T)) {
-            .Struct => |info| {
+            .@"struct" => |info| {
                 if (!info.is_tuple) {
                     @compileError("this structure is not a tuple");
                 }
@@ -288,7 +288,7 @@ pub const Value = struct {
     /// Only unions are accepted
     pub fn Variant(comptime T: type) type {
         switch (@typeInfo(T)) {
-            .Union => |_| {
+            .@"union" => |_| {
                 if (!doesImplementSer(T)) {
                     @compileError("pub fn ser(" ++ @typeName(T) ++ ", *std.ArrayList(u8)) !void --- not found on " ++ @typeName(T) ++ " union.");
                 }
@@ -317,7 +317,7 @@ pub const Value = struct {
     /// **Struct** type code 114 'r' is reserved for use in bindings and implementations
     /// to represent the general concept of a struct, and must not appear in signatures used on D-Bus.
     pub fn Struct(comptime S: type) type {
-        if (@typeInfo(S) != .Struct) {
+        if (@typeInfo(S) != .@"struct") {
             @compileError("unexpected input type");
         }
         const repr_len = reprLength(S);
@@ -357,7 +357,7 @@ pub const Value = struct {
 
             pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {
                 switch (@typeInfo(T)) {
-                    .Int => {
+                    .int => {
                         const slice = convertIntegrer(T, self.value, .big);
                         try list.appendSlice(&slice);
                     },
@@ -536,7 +536,7 @@ pub const Serializer = struct {
             try Value.UnixFd().new(data).ser(buffer);
         } else {
             switch (@typeInfo(T)) {
-                .Int => |info| {
+                .int => |info| {
                     if (info.bits == 16) {
                         if (info.signedness == .signed) {
                             try Value.Int16().new(data).ser(buffer);
