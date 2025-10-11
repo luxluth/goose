@@ -304,8 +304,8 @@ pub const Value = struct {
                         };
                     }
 
-                    pub fn ser(self: Self, buffer: *std.ArrayList(u8)) !void {
-                        try self.inner.ser(buffer);
+                    pub fn ser(self: Self, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+                        try self.inner.ser(buffer, gpa);
                     }
                 };
             },
@@ -563,13 +563,13 @@ pub const Serializer = struct {
                         }
                     }
                 },
-                .Float => |info| {
+                .float => |info| {
                     if (info.bits != 64) {
                         return error.F32CannotBeSerialized;
                     }
                     try Value.Double().new(data).ser(buffer, gpa);
                 },
-                .Bool => {
+                .bool => {
                     try Value.Bool().new(data).ser(buffer, gpa);
                 },
             }

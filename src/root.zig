@@ -105,13 +105,16 @@ pub const Connection = struct {
 
         const message = core.Message.new(header, body_arr.items);
         var bytes = try message.pack(self.__allocator);
-        std.debug.print("{any}\n", .{message});
+        const tt = Value.Struct(core.MessageHeader).new(header);
+        std.debug.print("{s} ~ {any}\n", .{ tt.repr, message });
+        std.debug.print("{any}\n", .{header.header_fields});
         defer bytes.deinit(self.__allocator);
         try self.sendBytesAndWaitForAnswer(bytes.items, serial);
     }
 
     fn sendBytesAndWaitForAnswer(self: *Connection, data: []u8, serial: u32) !void {
         try self.__inner_sock.writeAll(data);
+        std.debug.print("data = {any}\n", .{data});
         std.debug.print("[:{d}:SEND] -> {d} o\n", .{ serial, data.len });
         var reader_buf: [4096]u8 = undefined;
         var reader = self.__inner_sock.reader(&reader_buf);
