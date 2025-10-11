@@ -13,20 +13,39 @@ pub const Connection = struct {
     fn auth(socket: net.Stream) !void {
         var reader_buffer: [2048]u8 = undefined;
         var reader = socket.reader(&reader_buffer);
-        const io_reader = &reader.interface_state;
+        const io_reader: *std.Io.Reader = reader.interface();
 
         var writer_buffer: [2048]u8 = undefined;
         var writer = socket.writer(&writer_buffer);
         var io_writer = &writer.interface;
 
+        const uid: u32 = std.posix.getuid();
+        var uid_buf: [32]u8 = undefined;
+        const uid_str = try std.fmt.bufPrint(&uid_buf, "{}", .{uid});
+
+        var hex_buf: [64]u8 = undefined;
+        var out_i: usize = 0;
+        for (uid_str) |ch| {
+            const hi = "0123456789ABCDEF"[(ch >> 4) & 0xF];
+            const lo = "0123456789ABCDEF"[ch & 0xF];
+            hex_buf[out_i] = hi;
+            hex_buf[out_i + 1] = lo;
+            out_i += 2;
+        }
+
+        const hex = hex_buf[0..out_i];
+
         try io_writer.writeByte(0);
-        try io_writer.print("AUTH EXTERNAL 31303031\r\n", .{});
+        try io_writer.print("AUTH EXTERNAL {s}\r\n", .{hex});
         try io_writer.flush();
 
         const response = try io_reader.takeDelimiterInclusive('\n');
+        std.debug.print("RESPONSE = {s}\n", .{response});
         if (!std.mem.startsWith(u8, response, "OK")) {
-            return error.HandShakeFail;
+            return error.HandshakeFail;
         }
+
+        try io_writer.print("BEGIN\r\n", .{});
     }
 
     pub fn init(allocator: std.mem.Allocator) !Connection {
@@ -35,7 +54,7 @@ pub const Connection = struct {
 
         const socket_path = try extractUnixSocketPath(bus_address);
         const socket = try net.connectUnixSocket(socket_path);
-        std.log.debug(":: Connected to D-Bus at: {s}", .{socket_path});
+        std.log.debug("Connected to D-Bus at: {s}", .{socket_path});
 
         try auth(socket);
 
@@ -63,11 +82,11 @@ pub const Connection = struct {
         const U32 = Value.Uint32();
         const serial = self.serial_counter;
         defer self.serial_counter += 1;
-        var body_arr = std.ArrayList(u8).init(self.__allocator);
-        defer body_arr.deinit();
+        var body_arr = try std.ArrayList(u8).initCapacity(self.__allocator, 256);
+        defer body_arr.deinit(self.__allocator);
 
-        try Str.new(name).ser(&body_arr);
-        try U32.new(@intFromEnum(RequestNameFlags.DoNotQueue) | @intFromEnum(RequestNameFlags.ReplaceExisting)).ser(&body_arr);
+        try Str.new(name).ser(&body_arr, self.__allocator);
+        try U32.new(@intFromEnum(RequestNameFlags.DoNotQueue) | @intFromEnum(RequestNameFlags.ReplaceExisting)).ser(&body_arr, self.__allocator);
 
         const header = core.MessageHeader{
             .message_type = @intFromEnum(core.MessageType.MethodCall),
@@ -85,17 +104,20 @@ pub const Connection = struct {
         };
 
         const message = core.Message.new(header, body_arr.items);
-        const bytes = try message.pack(self.__allocator);
-        defer bytes.deinit();
+        var bytes = try message.pack(self.__allocator);
+        std.debug.print("{any}\n", .{message});
+        defer bytes.deinit(self.__allocator);
         try self.sendBytesAndWaitForAnswer(bytes.items, serial);
     }
 
     fn sendBytesAndWaitForAnswer(self: *Connection, data: []u8, serial: u32) !void {
         try self.__inner_sock.writeAll(data);
         std.debug.print("[:{d}:SEND] -> {d} o\n", .{ serial, data.len });
-        const reader = self.__inner_sock.reader();
-        const endian = try reader.readAllAlloc(self.__allocator, 512);
-        std.debug.print("{c}", .{endian[0]});
+        var reader_buf: [4096]u8 = undefined;
+        var reader = self.__inner_sock.reader(&reader_buf);
+        const io_reader: *std.Io.Reader = reader.interface();
+        try io_reader.readSliceAll(&reader_buf);
+        std.debug.print("{c}", .{reader_buf[0]});
     }
 };
 

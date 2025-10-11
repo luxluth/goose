@@ -39,7 +39,7 @@ pub const Value = struct {
         if (std.meta.hasMethod(T, "ser")) {
             const Args = std.meta.ArgsTuple(@TypeOf(T.ser));
             const fx = std.meta.fields(Args);
-            return (fx.len == 2 and fx[0].type == T and fx[1].type == *std.ArrayList(u8));
+            return (fx.len == 3 and fx[0].type == T and fx[1].type == *std.ArrayList(u8) and fx[2].type == std.mem.Allocator);
         }
 
         return false;
@@ -196,13 +196,13 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, buffer: *std.ArrayList(u8)) !void {
+            pub fn ser(self: Self, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
                 const array_data_length = @sizeOf(T) * self.inner.len;
                 if (array_data_length > std.math.pow(u32, 2, 26))
                     return error.ArraySizeExceeded;
                 const alignment = @alignOf(T);
                 const padded_length = alignUp(array_data_length, alignment);
-                const new_array = try buffer.addManyAsSlice(@sizeOf(u32) + padded_length);
+                const new_array = try buffer.addManyAsSlice(gpa, @sizeOf(u32) + padded_length);
                 const len = new_array[0..4];
                 len.* = &convertIntegrer(u32, array_data_length, .big);
             }
@@ -290,7 +290,7 @@ pub const Value = struct {
         switch (@typeInfo(T)) {
             .@"union" => |_| {
                 if (!doesImplementSer(T)) {
-                    @compileError("pub fn ser(" ++ @typeName(T) ++ ", *std.ArrayList(u8)) !void --- not found on " ++ @typeName(T) ++ " union.");
+                    @compileError("pub fn ser(" ++ @typeName(T) ++ ", *std.ArrayList(u8), std.mem.Allocator) !void --- not found on " ++ @typeName(T) ++ " union.");
                 }
                 return struct {
                     inner: T,
@@ -355,14 +355,14 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {
+            pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
                 switch (@typeInfo(T)) {
                     .int => {
                         const slice = convertIntegrer(T, self.value, .big);
-                        try list.appendSlice(&slice);
+                        try list.appendSlice(gpa, &slice);
                     },
                     else => {
-                        try list.appendSlice(&std.mem.toBytes(self.value));
+                        try list.appendSlice(gpa, &std.mem.toBytes(self.value));
                     },
                 }
             }
@@ -385,24 +385,24 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {
+            pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
                 const len: u32 = @intCast(self.value.len);
                 switch (r) {
                     's' => {
-                        try list.appendSlice(&convertIntegrer(u32, len, .big));
-                        try list.appendSlice(self.value);
-                        try list.append(0);
+                        try list.appendSlice(gpa, &convertIntegrer(u32, len, .big));
+                        try list.appendSlice(gpa, self.value);
+                        try list.append(gpa, 0);
                     },
                     'o' => {
                         // TODO: check if is valid object path
-                        try list.appendSlice(&convertIntegrer(u32, len, .big));
-                        try list.appendSlice(self.value);
-                        try list.append(0);
+                        try list.appendSlice(gpa, &convertIntegrer(u32, len, .big));
+                        try list.appendSlice(gpa, self.value);
+                        try list.append(gpa, 0);
                     },
                     'g' => {
-                        try list.append(@as(u8, @truncate(len)));
-                        try list.appendSlice(self.value);
-                        try list.append(0);
+                        try list.append(gpa, @as(u8, @truncate(len)));
+                        try list.appendSlice(gpa, self.value);
+                        try list.append(gpa, 0);
                     },
                     else => unreachable,
                 }
@@ -470,9 +470,9 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {
+            pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
                 const x: u32 = @intFromBool(self.value);
-                try list.appendSlice(&convertIntegrer(u32, x, .big));
+                try list.appendSlice(gpa, &convertIntegrer(u32, x, .big));
             }
         };
     }
@@ -495,9 +495,9 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, list: *std.ArrayList(u8)) !void {
+            pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
                 const slice = convertIntegrer(u32, self.value, .big);
-                try list.appendSlice(&slice);
+                try list.appendSlice(gpa, &slice);
             }
         };
     }
@@ -525,39 +525,39 @@ pub const Value = struct {
 };
 
 pub const Serializer = struct {
-    fn trySerialize(comptime T: type, data: T, buffer: *std.ArrayList(u8)) !void {
+    fn trySerialize(comptime T: type, data: T, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
         if (T == GStr) {
-            try Value.String().new(data).ser(buffer);
+            try Value.String().new(data).ser(buffer, gpa);
         } else if (T == GPath) {
-            try Value.ObjectPath().new(data).ser(buffer);
+            try Value.ObjectPath().new(data).ser(buffer, gpa);
         } else if (T == GSig) {
-            try Value.Signature().new(data).ser(buffer);
+            try Value.Signature().new(data).ser(buffer, gpa);
         } else if (T == GUFd) {
-            try Value.UnixFd().new(data).ser(buffer);
+            try Value.UnixFd().new(data).ser(buffer, gpa);
         } else {
             switch (@typeInfo(T)) {
                 .int => |info| {
                     if (info.bits == 16) {
                         if (info.signedness == .signed) {
-                            try Value.Int16().new(data).ser(buffer);
+                            try Value.Int16().new(data).ser(buffer, gpa);
                         } else {
-                            try Value.Uint16().new(data).ser(buffer);
+                            try Value.Uint16().new(data).ser(buffer, gpa);
                         }
                     } else if (info.bits == 32) {
                         if (info.signedness == .signed) {
-                            try Value.Int32().new(data).ser(buffer);
+                            try Value.Int32().new(data).ser(buffer, gpa);
                         } else {
-                            try Value.Uint32().new(data).ser(buffer);
+                            try Value.Uint32().new(data).ser(buffer, gpa);
                         }
                     } else if (info.bits == 64) {
                         if (info.signedness == .signed) {
-                            try Value.Int64().new(data).ser(buffer);
+                            try Value.Int64().new(data).ser(buffer, gpa);
                         } else {
-                            try Value.Uint64().new(data).ser(buffer);
+                            try Value.Uint64().new(data).ser(buffer, gpa);
                         }
                     } else if (info.bits == 8) {
                         if (info.signedness == .unsigned) {
-                            try Value.Byte().new(data).ser(buffer);
+                            try Value.Byte().new(data).ser(buffer, gpa);
                         } else {
                             return error.I8CannotBeSerialized;
                         }
@@ -567,10 +567,10 @@ pub const Serializer = struct {
                     if (info.bits != 64) {
                         return error.F32CannotBeSerialized;
                     }
-                    try Value.Double().new(data).ser(buffer);
+                    try Value.Double().new(data).ser(buffer, gpa);
                 },
                 .Bool => {
-                    try Value.Bool().new(data).ser(buffer);
+                    try Value.Bool().new(data).ser(buffer, gpa);
                 },
             }
         }

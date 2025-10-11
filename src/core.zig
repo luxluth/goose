@@ -87,7 +87,7 @@ pub const HeaderFieldValue = union(HeaderFieldValueTag) {
     Signature: [:0]const u8,
     UnixFds: u32,
 
-    pub fn ser(self: HeaderFieldValue, buffer: *std.ArrayList(u8)) !void {
+    pub fn ser(self: HeaderFieldValue, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
         const Sig = Value.Signature();
         const Str = Value.String();
         const Path = Value.ObjectPath();
@@ -95,10 +95,10 @@ pub const HeaderFieldValue = union(HeaderFieldValueTag) {
 
         switch (self) {
             .UnixFds, .ReplySerial => |x| {
-                try U32.new(x).ser(buffer);
+                try U32.new(x).ser(buffer, gpa);
             },
             .Path => |v| {
-                try Path.new(v).ser(buffer);
+                try Path.new(v).ser(buffer, gpa);
             },
             .Interface,
             .Member,
@@ -106,11 +106,11 @@ pub const HeaderFieldValue = union(HeaderFieldValueTag) {
             .Destination,
             .Sender,
             => |v| {
-                try Str.new(v).ser(buffer);
+                try Str.new(v).ser(buffer, gpa);
             },
             .Signature,
             => |v| {
-                try Sig.new(v).ser(buffer);
+                try Sig.new(v).ser(buffer, gpa);
             },
         }
     }
@@ -237,25 +237,25 @@ pub const MessageHeader = struct {
         const Byte = Value.Byte();
         const U32 = Value.Uint32();
 
-        var buffer = std.ArrayList(u8).init(allocator);
+        var buffer = try std.ArrayList(u8).initCapacity(allocator, 256);
 
-        try Byte.new(self.endianess).ser(&buffer);
-        try Byte.new(self.message_type).ser(&buffer);
-        try Byte.new(self.flags).ser(&buffer);
-        try Byte.new(self.proto_version).ser(&buffer);
+        try Byte.new(self.endianess).ser(&buffer, allocator);
+        try Byte.new(self.message_type).ser(&buffer, allocator);
+        try Byte.new(self.flags).ser(&buffer, allocator);
+        try Byte.new(self.proto_version).ser(&buffer, allocator);
 
-        try U32.new(self.body_length).ser(&buffer); // Only big endian for now
-        try U32.new(self.serial).ser(&buffer);
+        try U32.new(self.body_length).ser(&buffer, allocator); // Only big endian for now
+        try U32.new(self.serial).ser(&buffer, allocator);
 
         for (self.header_fields) |field| {
-            try buffer.append(field.code);
-            try field.value.ser(&buffer);
+            try buffer.append(allocator, field.code);
+            try field.value.ser(&buffer, allocator);
         }
 
         const header_length = buffer.items.len;
         const padding_needed = (8 - (header_length % 8)) % 8;
         if (padding_needed > 0) {
-            try buffer.appendNTimes(0, padding_needed);
+            try buffer.appendNTimes(allocator, 0, padding_needed);
         }
 
         return buffer;
@@ -275,7 +275,7 @@ pub const Message = struct {
 
     pub fn pack(self: Message, allocator: std.mem.Allocator) !std.ArrayList(u8) {
         var headerBytes = try self.header.pack(allocator);
-        try headerBytes.appendSlice(self.body);
+        try headerBytes.appendSlice(allocator, self.body);
 
         return headerBytes;
     }
