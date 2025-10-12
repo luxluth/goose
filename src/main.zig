@@ -3,6 +3,7 @@ const std = @import("std");
 const goose = @import("goose");
 const core = @import("goose").core;
 const Value = core.value.Value;
+const DBusWriter = core.value.DBusWriter;
 const Connection = goose.Connection;
 
 pub fn main() !void {
@@ -12,8 +13,14 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    // var arr = std.ArrayList(u8).init(allocator);
-    // defer arr.deinit();
+    // var buffer = try std.ArrayList(u8).initCapacity(allocator, 256);
+    // defer buffer.deinit(allocator);
+    //
+    // var writer = DBusWriter.init(&buffer, allocator, .big, 0);
+    //
+    // try Value.Int32().new(69).ser(&writer);
+    // std.debug.print("{any}\n", .{writer});
+
     //
     // try Value.String().new("Hello world").ser(&arr);
     // try Value.Double().new(13.45).ser(&arr);

@@ -1,9 +1,13 @@
 const std = @import("std");
 const net = std.net;
-pub const core = @import("core.zig");
-const Value = @import("value.zig").Value;
 const rand = std.crypto.random;
-const convertInteger = @import("utils.zig").convertInteger;
+
+pub const core = @import("core.zig");
+
+const Value = core.value.Value;
+const DBusWriter = core.value.DBusWriter;
+const readInteger = core.utils.readInteger;
+const convertInteger = core.utils.convertInteger;
 
 pub const Connection = struct {
     __inner_sock: net.Stream,
@@ -80,47 +84,118 @@ pub const Connection = struct {
     pub fn requestName(self: *Connection, name: [:0]const u8) !void {
         const Str = Value.String();
         const U32 = Value.Uint32();
+
         const serial = self.serial_counter;
         defer self.serial_counter += 1;
+
         var body_arr = try std.ArrayList(u8).initCapacity(self.__allocator, 256);
         defer body_arr.deinit(self.__allocator);
 
-        try Str.new(name).ser(&body_arr, self.__allocator);
-        try U32.new(@intFromEnum(RequestNameFlags.DoNotQueue) | @intFromEnum(RequestNameFlags.ReplaceExisting)).ser(&body_arr, self.__allocator);
+        var dwriter = DBusWriter.init(&body_arr, self.__allocator, .little);
+
+        const flags =
+            @intFromEnum(RequestNameFlags.DoNotQueue) |
+            @intFromEnum(RequestNameFlags.ReplaceExisting);
+
+        try Str.new(name).ser(&dwriter);
+        try U32.new(flags).ser(&dwriter);
 
         const header = core.MessageHeader{
-            .message_type = @intFromEnum(core.MessageType.MethodCall),
+            .message_type = core.MessageType.MethodCall,
             .flags = @intFromEnum(core.MessageFlag.__EMPTY),
             .proto_version = 1,
             .body_length = @intCast(body_arr.items.len),
             .serial = serial,
             .header_fields = @constCast(&[_]core.HeaderField{
-                .{ .code = @intFromEnum(core.HeaderFieldCode.Destination), .value = .{ .Destination = "org.freedesktop.DBus" } },
-                .{ .code = @intFromEnum(core.HeaderFieldCode.Path), .value = .{ .Path = "/org/freedesktop/DBus" } },
-                .{ .code = @intFromEnum(core.HeaderFieldCode.Interface), .value = .{ .Interface = "org.freedesktop.DBus" } },
-                .{ .code = @intFromEnum(core.HeaderFieldCode.Member), .value = .{ .Member = "RequestName" } },
-                .{ .code = @intFromEnum(core.HeaderFieldCode.ReplySerial), .value = .{ .ReplySerial = serial } },
+                .{ .code = core.HeaderFieldCode.Destination, .value = .{ .Destination = "org.freedesktop.DBus" } },
+                .{ .code = core.HeaderFieldCode.Interface, .value = .{ .Interface = "org.freedesktop.DBus" } },
+                .{ .code = core.HeaderFieldCode.Path, .value = .{ .Path = "/org/freedesktop/DBus" } },
+                .{ .code = core.HeaderFieldCode.Member, .value = .{ .Member = "RequestName" } },
+                .{ .code = core.HeaderFieldCode.Signature, .value = .{ .Signature = "su" } },
             }),
         };
 
         const message = core.Message.new(header, body_arr.items);
         var bytes = try message.pack(self.__allocator);
-        const tt = Value.Struct(core.MessageHeader).new(header);
-        std.debug.print("{s} ~ {any}\n", .{ tt.repr, message });
+        // const tt = Value.Struct(core.MessageHeader).new(header);
+        // std.debug.print("{s} ~ {any}\n", .{ tt.repr, message });
         std.debug.print("{any}\n", .{header.header_fields});
         defer bytes.deinit(self.__allocator);
         try self.sendBytesAndWaitForAnswer(bytes.items, serial);
     }
 
+    fn readExact(r: *std.Io.Reader, buf: []u8) !void {
+        var got: usize = 0;
+        while (got < buf.len) {
+            const n = try r.readSliceShort(buf[got..]);
+            if (n == 0) return error.UnexpectedEof;
+            got += n;
+        }
+    }
+
+    fn readPadding(r: *std.Io.Reader, current_offset: *usize, @"align": usize) !void {
+        const rem = current_offset.* % @"align";
+        if (rem == 0) return;
+        var tmp: [8]u8 = undefined;
+        const need = @"align" - rem;
+        try readExact(r, tmp[0..need]);
+        current_offset.* += need;
+    }
+
     fn sendBytesAndWaitForAnswer(self: *Connection, data: []u8, serial: u32) !void {
         try self.__inner_sock.writeAll(data);
-        std.debug.print("data = {any}\n", .{data});
-        std.debug.print("[:{d}:SEND] -> {d} o\n", .{ serial, data.len });
-        var reader_buf: [4096]u8 = undefined;
-        var reader = self.__inner_sock.reader(&reader_buf);
+        std.debug.print("[:{d}:SEND] -> {d} bytes\n", .{ serial, data.len });
+
+        var rbuf: [8192]u8 = undefined;
+        var reader = self.__inner_sock.reader(&rbuf);
         const io_reader: *std.Io.Reader = reader.interface();
-        try io_reader.readSliceAll(&reader_buf);
-        std.debug.print("{c}", .{reader_buf[0]});
+
+        var hdr4: [4]u8 = undefined;
+        try readExact(io_reader, hdr4[0..4]); // byte order, type, flags, version
+        const endian: std.builtin.Endian = switch (hdr4[0]) {
+            'l' => .little,
+            'B' => .big,
+            else => return error.BadEndianFlag,
+        };
+
+        const mtype: u8 = hdr4[1];
+        _ = hdr4[2]; // flags
+        _ = hdr4[3]; // version
+
+        var u32b: [4]u8 = undefined;
+        try readExact(io_reader, u32b[0..4]); // body_length
+        const body_len: u32 = readInteger(u32, &u32b, endian);
+        try readExact(io_reader, u32b[0..4]); // serial
+        const msg_serial: u32 = readInteger(u32, &u32b, endian);
+
+        // offset counts from start of message body (we’re reading header at offset 0)
+        var off: usize = 12;
+        // --- header fields array: pad to 4, read len, pad to 8, read payload ---
+        try readPadding(io_reader, &off, 4);
+        try readExact(io_reader, u32b[0..4]);
+        const fields_len: u32 = readInteger(u32, &u32b, endian);
+        off += 4;
+
+        try readPadding(io_reader, &off, 8);
+
+        const fields_bytes = try self.__allocator.alloc(u8, fields_len);
+        defer self.__allocator.free(fields_bytes);
+        try readExact(io_reader, fields_bytes);
+        off += fields_len;
+
+        // --- pad header to 8, then read body ---
+        try readPadding(io_reader, &off, 8);
+
+        const body = try self.__allocator.alloc(u8, body_len);
+        defer self.__allocator.free(body);
+        if (body_len > 0) try readExact(io_reader, body);
+
+        // TODO: parse fields_bytes to find ReplySerial and ensure it matches `serial`.
+        // For a production client, loop reading messages until you find:
+        //   mtype in {MethodReturn, Error} AND header.ReplySerial == serial
+
+        std.debug.print("RECV type={d} serial={d} body_len={d}\n", .{ mtype, msg_serial, body_len });
+        // TODO: decode body according to header Signature if you need the return value
     }
 };
 

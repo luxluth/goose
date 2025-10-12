@@ -1,7 +1,11 @@
 pub const std = @import("std");
-pub const value = @import("value.zig");
-pub const convertInteger = @import("utils.zig").convertInteger;
+const Endian = std.builtin.Endian;
 
+pub const utils = @import("utils.zig");
+pub const value = @import("value.zig");
+
+const DBusWriter = value.DBusWriter;
+const dbusAlignOf = value.dbusAlignOf;
 const Value = value.Value;
 const Allocator = std.mem.Allocator;
 
@@ -87,7 +91,7 @@ pub const HeaderFieldValue = union(HeaderFieldValueTag) {
     Signature: [:0]const u8,
     UnixFds: u32,
 
-    pub fn ser(self: HeaderFieldValue, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+    pub fn ser(self: HeaderFieldValue, w: *DBusWriter) !void {
         const Sig = Value.Signature();
         const Str = Value.String();
         const Path = Value.ObjectPath();
@@ -95,10 +99,10 @@ pub const HeaderFieldValue = union(HeaderFieldValueTag) {
 
         switch (self) {
             .UnixFds, .ReplySerial => |x| {
-                try U32.new(x).ser(buffer, gpa);
+                try U32.new(x).ser(&w);
             },
             .Path => |v| {
-                try Path.new(v).ser(buffer, gpa);
+                try Path.new(v).ser(&w);
             },
             .Interface,
             .Member,
@@ -106,11 +110,11 @@ pub const HeaderFieldValue = union(HeaderFieldValueTag) {
             .Destination,
             .Sender,
             => |v| {
-                try Str.new(v).ser(buffer, gpa);
+                try Str.new(v).ser(&w);
             },
             .Signature,
             => |v| {
-                try Sig.new(v).ser(buffer, gpa);
+                try Sig.new(v).ser(&w);
             },
         }
     }
@@ -130,7 +134,7 @@ pub const HeaderFieldCode = enum(u8) {
 };
 
 pub const HeaderField = struct {
-    code: u8,
+    code: HeaderFieldCode,
     value: HeaderFieldValue,
 };
 
@@ -204,10 +208,10 @@ pub const MessageFlag = enum(u8) {
 pub const MessageHeader = struct {
     /// Endianness flag; ASCII 'l' for little-endian or ASCII 'B' for big-endian.
     /// Both header and body are in this endianness.
-    /// By default this library default to big-endian
-    endianess: u8 = 'B',
+    /// By default this library default to little-endian
+    endianess: Endian = .little,
     /// Message type. Unknown types must be ignored
-    message_type: u8,
+    message_type: MessageType,
     /// Bitwise OR of flags. Unknown flags must be ignored.
     flags: u8,
     /// Major protocol version of the sending application. If the major protocol
@@ -237,28 +241,52 @@ pub const MessageHeader = struct {
         const Byte = Value.Byte();
         const U32 = Value.Uint32();
 
-        var buffer = try std.ArrayList(u8).initCapacity(allocator, 256);
+        var buf = try std.ArrayList(u8).initCapacity(allocator, 256);
+        var w = DBusWriter.init(&buf, allocator, self.endianess);
 
-        try Byte.new(self.endianess).ser(&buffer, allocator);
-        try Byte.new(self.message_type).ser(&buffer, allocator);
-        try Byte.new(self.flags).ser(&buffer, allocator);
-        try Byte.new(self.proto_version).ser(&buffer, allocator);
+        const order_char: u8 = switch (self.endianess) {
+            .little => 'l',
+            .big => 'B',
+        };
+        try Value.Byte().new(order_char).ser(&w);
 
-        try U32.new(self.body_length).ser(&buffer, allocator); // Only big endian for now
-        try U32.new(self.serial).ser(&buffer, allocator);
+        try Byte.new(@intFromEnum(self.message_type)).ser(&w);
+        try Byte.new(self.flags).ser(&w);
+        try Byte.new(self.proto_version).ser(&w);
 
-        for (self.header_fields) |field| {
-            try buffer.append(allocator, field.code);
-            try field.value.ser(&buffer, allocator);
+        try U32.new(self.body_length).ser(&w);
+        try U32.new(self.serial).ser(&w);
+
+        try w.padTo(4);
+        const len_pos = buf.items.len;
+        try buf.appendNTimes(allocator, 0, 4);
+
+        try w.padTo(8);
+        const start_elems = buf.items.len;
+        // Each element: 8-aligned struct:
+        //   field[0]: BYTE code (1-aligned)
+        //   field[1]: VARIANT (1-aligned) => write 'g' + payload
+        for (self.header_fields) |hf| {
+            try w.padTo(8);
+            try Value.Byte().new(@intFromEnum(hf.code)).ser(&w);
+            try serHeaderFieldVariant(hf.value, &w);
         }
 
-        const header_length = buffer.items.len;
+        // Patch array byte length
+        const arr_bytes = buf.items.len - start_elems;
+        if (arr_bytes > std.math.maxInt(u32)) return error.ArrayTooLarge;
+        w.writeU32At(len_pos, @intCast(arr_bytes));
+
+        const header_length = buf.items.len;
         const padding_needed = (8 - (header_length % 8)) % 8;
         if (padding_needed > 0) {
-            try buffer.appendNTimes(allocator, 0, padding_needed);
+            try buf.appendNTimes(allocator, 0, padding_needed);
         }
 
-        return buffer;
+        // 5) Pad header to 8
+        try w.padTo(8);
+
+        return buf;
     }
 };
 
@@ -273,10 +301,78 @@ pub const Message = struct {
         };
     }
 
+    // pub fn pack(self: Message, allocator: std.mem.Allocator) !std.ArrayList(u8) {
+    //     var headerBytes = try self.header.pack(allocator);
+    //     try headerBytes.appendSlice(allocator, self.body);
+    //
+    //     return headerBytes;
+    // }
     pub fn pack(self: Message, allocator: std.mem.Allocator) !std.ArrayList(u8) {
-        var headerBytes = try self.header.pack(allocator);
-        try headerBytes.appendSlice(allocator, self.body);
+        // Ensure header has correct body_length
+        var hdr = self.header;
+        hdr.body_length = @intCast(self.body.len);
 
-        return headerBytes;
+        var header_bytes = try hdr.pack(allocator);
+        errdefer header_bytes.deinit(allocator);
+
+        // The message is: header || body (body itself must already be validly marshalled)
+        try header_bytes.appendSlice(allocator, self.body);
+        return header_bytes;
     }
 };
+
+// Write the header-field VARIANT ("v") given our union value.
+// This function writes:
+//   1) the 'g' (signature of the contained type)
+//   2) the contained value aligned to its own D-Bus alignment
+fn serHeaderFieldVariant(hfv: HeaderFieldValue, w: *DBusWriter) !void {
+    // We inline the variant emission: 'g' then aligned payload.
+    switch (hfv) {
+        .Path => |s| {
+            // VARIANT signature = 's' (object path uses string encoding on the wire)
+            try w.writeSignatureOf(value.GPath); // signature 's'
+            try w.padTo(dbusAlignOf(value.GPath));
+            try Value.ObjectPath().new(s).ser(w);
+        },
+        .Interface => |s| {
+            try w.writeSignatureOf(value.GStr);
+            try w.padTo(dbusAlignOf(value.GStr));
+            try Value.String().new(s).ser(w);
+        },
+        .Member => |s| {
+            try w.writeSignatureOf(value.GStr);
+            try w.padTo(dbusAlignOf(value.GStr));
+            try Value.String().new(s).ser(w);
+        },
+        .ErrorName => |s| {
+            try w.writeSignatureOf(value.GStr);
+            try w.padTo(dbusAlignOf(value.GStr));
+            try Value.String().new(s).ser(w);
+        },
+        .Destination => |s| {
+            try w.writeSignatureOf(value.GStr);
+            try w.padTo(dbusAlignOf(value.GStr));
+            try Value.String().new(s).ser(w);
+        },
+        .Sender => |s| {
+            try w.writeSignatureOf(value.GStr);
+            try w.padTo(dbusAlignOf(value.GStr));
+            try Value.String().new(s).ser(w);
+        },
+        .Signature => |sig| {
+            try w.writeSignatureOf(value.GSig); // inner type is 'g'
+            try w.padTo(dbusAlignOf(value.GSig)); // 1
+            try Value.Signature().new(sig).ser(w);
+        },
+        .ReplySerial => |u| {
+            try w.writeSignatureOf(u32);
+            try w.padTo(dbusAlignOf(u32)); // 4
+            try Value.Uint32().new(u).ser(w);
+        },
+        .UnixFds => |u| {
+            try w.writeSignatureOf(u32);
+            try w.padTo(dbusAlignOf(u32)); // 4
+            try Value.Uint32().new(u).ser(w);
+        },
+    }
+}

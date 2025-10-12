@@ -1,5 +1,72 @@
 const std = @import("std");
-const convertIntegrer = @import("utils.zig").convertInteger;
+const convertInteger = @import("utils.zig").convertInteger;
+const Endian = std.builtin.Endian;
+
+pub const DBusWriter = struct {
+    buffer: *std.ArrayList(u8),
+    gpa: std.mem.Allocator,
+    endian: Endian,
+    body_start_offset: usize,
+
+    pub fn init(buffer: *std.ArrayList(u8), gpa: std.mem.Allocator, endian: Endian) DBusWriter {
+        return .{ .buffer = buffer, .gpa = gpa, .endian = endian, .body_start_offset = 0 };
+    }
+
+    pub fn padTo(self: *DBusWriter, @"align": usize) !void {
+        if (@"align" <= 1) return;
+        const abs_len = self.body_start_offset + self.buffer.items.len;
+        const rem = abs_len % @"align";
+        if (rem != 0) try self.buffer.appendNTimes(self.gpa, 0, @"align" - rem);
+    }
+
+    pub fn writeInt(self: *DBusWriter, comptime T: type, x: T) !void {
+        const bytes = convertInteger(T, x, self.endian);
+        try self.buffer.appendSlice(self.gpa, &bytes);
+    }
+
+    pub fn writeU32At(self: *DBusWriter, pos: usize, v: u32) void {
+        var b: [4]u8 = convertInteger(u32, v, self.endian);
+        @memcpy(self.buffer.items[pos .. pos + 4], &b);
+    }
+
+    pub fn writeSignatureOf(self: *DBusWriter, comptime T: type) !void {
+        const sig_len = Value.reprLength(T);
+        if (sig_len > 255) return error.SignatureTooLong;
+        var sig: [sig_len]u8 = undefined;
+        Value.getRepr(T, sig_len, 0, &sig);
+
+        // 'g' encoding: u8 length (no NUL), bytes, NUL; 1-aligned
+        try self.padTo(1);
+        try self.buffer.append(self.gpa, @as(u8, @intCast(sig_len)));
+        try self.buffer.appendSlice(self.gpa, &sig);
+        try self.buffer.append(self.gpa, 0);
+    }
+};
+
+pub fn dbusAlignOf(comptime T: type) usize {
+    if (T == GStr or T == GPath) return 4; // 's','o'
+    if (T == GSig) return 1; // 'g'
+    if (T == GUFd) return 4; // 'h'
+
+    return switch (@typeInfo(T)) {
+        .int => |info| switch (info.bits) {
+            8 => 1,
+            16 => 2,
+            32 => 4,
+            64 => 8,
+            else => @compileError("Unsupported integer width for D-Bus"),
+        },
+        .bool => 4, // 'b' => u32 on wire
+        .float => |info| switch (info.bits) {
+            64 => 8,
+            else => @compileError("Only f64 on D-Bus"),
+        },
+        .@"struct" => |_| 8, // struct/dict-entry container
+        .@"union" => |_| 1, // 'v'
+        .array => |_| 4, // 'a'
+        else => @compileError("Unsupported alignment type for D-Bus"),
+    };
+}
 
 // String wrapper
 pub const GStr = struct {
@@ -39,7 +106,7 @@ pub const Value = struct {
         if (std.meta.hasMethod(T, "ser")) {
             const Args = std.meta.ArgsTuple(@TypeOf(T.ser));
             const fx = std.meta.fields(Args);
-            return (fx.len == 3 and fx[0].type == T and fx[1].type == *std.ArrayList(u8) and fx[2].type == std.mem.Allocator);
+            return (fx.len == 2 and fx[0].type == T and fx[1].type == *DBusWriter);
         }
 
         return false;
@@ -86,7 +153,7 @@ pub const Value = struct {
     }
 
     fn getRepr(comptime T: type, len: comptime_int, start: comptime_int, xs: *[len]u8) void {
-        var real_start = start;
+        var real_start: usize = start;
 
         if (T == GStr) {
             xs[real_start] = 's';
@@ -196,15 +263,40 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
-                const array_data_length = @sizeOf(T) * self.inner.len;
-                if (array_data_length > std.math.pow(u32, 2, 26))
-                    return error.ArraySizeExceeded;
-                const alignment = @alignOf(T);
-                const padded_length = alignUp(array_data_length, alignment);
-                const new_array = try buffer.addManyAsSlice(gpa, @sizeOf(u32) + padded_length);
-                const len = new_array[0..4];
-                len.* = &convertIntegrer(u32, array_data_length, .big);
+            // pub fn ser(self: Self, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+            //     const array_data_length = @sizeOf(T) * self.inner.len;
+            //     if (array_data_length > std.math.pow(u32, 2, 26))
+            //         return error.ArraySizeExceeded;
+            //     const alignment = @alignOf(T);
+            //     const padded_length = alignUp(array_data_length, alignment);
+            //     const new_array = try buffer.addManyAsSlice(gpa, @sizeOf(u32) + padded_length);
+            //     const len = new_array[0..4];
+            //     len.* = &convertInteger(u32, array_data_length, .big);
+            // }
+            pub fn ser(self: Self, w: *DBusWriter) !void {
+                // 4-align for array container
+                try w.padTo(4);
+
+                // Reserve length (u32), patch later
+                const len_pos = w.buffer.items.len;
+                try w.buffer.appendNTimes(w.gpa, 0, 4);
+
+                // Align element block to element alignment A
+                const A = dbusAlignOf(T);
+                try w.padTo(A);
+                const start_elems = w.buffer.items.len;
+
+                var i: usize = 0;
+                while (i < self.inner.len) : (i += 1) {
+                    // align per element for safety (especially composites)
+                    try w.padTo(A);
+                    try Serializer.trySerialize(T, self.inner[i], w);
+                }
+
+                // Patch array byte length
+                const arr_bytes: usize = w.buffer.items.len - start_elems;
+                if (arr_bytes > std.math.maxInt(u32)) return error.ArrayTooLarge;
+                w.writeU32At(len_pos, @intCast(arr_bytes));
             }
 
             fn alignUp(value: usize, alignment: usize) usize {
@@ -216,16 +308,8 @@ pub const Value = struct {
     /// Tuple is a set of element. The order of is important
     /// `ivv` -> `INT32` `VARIANT` `VARIANT`
     pub fn Tuple(comptime T: type) type {
-        switch (@typeInfo(T)) {
-            .@"struct" => |info| {
-                if (!info.is_tuple) {
-                    @compileError("this structure is not a tuple");
-                }
-            },
-            else => {
-                @compileError("unexpected input type");
-            },
-        }
+        const info = @typeInfo(T);
+        if (info != .@"struct" or !info.@"struct".is_tuple) @compileError("Tuple() expects a tuple struct");
 
         const repr_len = reprLength(T);
         var repr_arr = [_]u8{0} ** (repr_len);
@@ -241,6 +325,13 @@ pub const Value = struct {
                     .inner = structure,
                     .repr = &rr,
                 };
+            }
+
+            pub fn ser(self: Self, w: *DBusWriter) !void {
+                inline for (info.@"struct".fields) |fld| {
+                    try w.padTo(dbusAlignOf(fld.type));
+                    try Serializer.trySerialize(fld.type, @field(self.inner, fld.name), w);
+                }
             }
         };
     }
@@ -280,6 +371,52 @@ pub const Value = struct {
                     .inner = inner,
                 };
             }
+
+            pub fn ser(self: Self, w: *DBusWriter) !void {
+                // This is precisely: Array of dict-entry
+                // Array header (4-align)
+                try w.padTo(4);
+                const len_pos = w.buffer.items.len;
+                try w.buffer.appendNTimes(w.gpa, 0, 4);
+
+                // Elements block must start at 8 (dict-entry alignment)
+                try w.padTo(8);
+                const start_elems = w.buffer.items.len;
+
+                // Iterate entries (supports std.StringHashMap and slices of {key,value})
+                if (std.meta.hasMethod(@TypeOf(self.inner), "iterator")) {
+                    var it = self.inner.iterator();
+                    while (it.next()) |e| {
+                        try w.padTo(8); // each dict-entry
+                        try w.padTo(dbusAlignOf(K));
+                        try Serializer.trySerialize(K, e.key_ptr.*, w);
+                        try w.padTo(dbusAlignOf(V));
+                        try Serializer.trySerialize(V, e.value_ptr.*, w);
+                    }
+                } else switch (@typeInfo(@TypeOf(self.inner))) {
+                    .slice => |si| {
+                        const Elem = si.child;
+                        const einfo = @typeInfo(Elem);
+                        if (einfo != .@"struct") return error.UnsupportedDictBacking;
+                        inline for (einfo.@"struct".fields) |_| {} // keep einfo constexpr
+                        for (self.inner) |ev| {
+                            try w.padTo(8);
+                            const k = @field(ev, "key");
+                            const v = @field(ev, "value");
+                            try w.padTo(dbusAlignOf(K));
+                            try Serializer.trySerialize(K, k, w);
+                            try w.padTo(dbusAlignOf(V));
+                            try Serializer.trySerialize(V, v, w);
+                        }
+                    },
+                    else => return error.UnsupportedDictBacking,
+                }
+
+                // Patch array byte length
+                const arr_bytes: usize = w.buffer.items.len - start_elems;
+                if (arr_bytes > std.math.maxInt(u32)) return error.ArrayTooLarge;
+                w.writeU32At(len_pos, @intCast(arr_bytes));
+            }
         };
     }
 
@@ -304,8 +441,27 @@ pub const Value = struct {
                         };
                     }
 
-                    pub fn ser(self: Self, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
-                        try self.inner.ser(buffer, gpa);
+                    pub fn ser(self: Self, w: *DBusWriter) !void {
+                        // 1) write signature ('g'), 2) align to inner alignment, 3) write payload
+                        switch (self.inner) {
+                            inline else => |payload| {
+                                const U = @TypeOf(self.inner);
+                                const uinfo = @typeInfo(U).@"union";
+                                comptime var found = false;
+                                inline for (uinfo.fields) |f| {
+                                    if (!found and @field(self.inner, f.name) == payload) {
+                                        const PT = f.type;
+                                        // signature (1-aligned)
+                                        try w.writeSignatureOf(PT);
+                                        // align & write payload
+                                        try w.padTo(dbusAlignOf(PT));
+                                        try Serializer.trySerialize(PT, payload, w);
+                                        found = true;
+                                    }
+                                }
+                                if (!found) @compileError("Active union field not found");
+                            },
+                        }
                     }
                 };
             },
@@ -335,6 +491,14 @@ pub const Value = struct {
                     .repr = &rr,
                 };
             }
+
+            pub fn ser(self: Self, w: *DBusWriter) !void {
+                try w.padTo(8);
+                inline for (@typeInfo(S).@"struct".fields) |fld| {
+                    try w.padTo(dbusAlignOf(fld.type));
+                    try Serializer.trySerialize(fld.type, @field(self.inner, fld.name), w);
+                }
+            }
         };
     }
 
@@ -355,15 +519,26 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+            // pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+            //     switch (@typeInfo(T)) {
+            //         .int => {
+            //             const slice = convertInteger(T, self.value, .big);
+            //             try list.appendSlice(gpa, &slice);
+            //         },
+            //         else => {
+            //             try list.appendSlice(gpa, &std.mem.toBytes(self.value));
+            //         },
+            //     }
+            // }
+            pub fn ser(self: Self, w: *DBusWriter) !void {
+                try w.padTo(dbusAlignOf(T));
                 switch (@typeInfo(T)) {
-                    .int => {
-                        const slice = convertIntegrer(T, self.value, .big);
-                        try list.appendSlice(gpa, &slice);
+                    .int => try w.writeInt(T, self.value),
+                    .float => {
+                        const bits: u64 = @bitCast(self.value); // f64
+                        try w.writeInt(u64, bits);
                     },
-                    else => {
-                        try list.appendSlice(gpa, &std.mem.toBytes(self.value));
-                    },
+                    else => unreachable,
                 }
             }
         };
@@ -385,24 +560,44 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
-                const len: u32 = @intCast(self.value.len);
+            // pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+            //     const len: u32 = @intCast(self.value.len);
+            //     switch (r) {
+            //         's' => {
+            //             try list.appendSlice(gpa, &convertInteger(u32, len, .big));
+            //             try list.appendSlice(gpa, self.value);
+            //             try list.append(gpa, 0);
+            //         },
+            //         'o' => {
+            //             // TODO: check if is valid object path
+            //             try list.appendSlice(gpa, &convertInteger(u32, len, .big));
+            //             try list.appendSlice(gpa, self.value);
+            //             try list.append(gpa, 0);
+            //         },
+            //         'g' => {
+            //             try list.append(gpa, @as(u8, @truncate(len)));
+            //             try list.appendSlice(gpa, self.value);
+            //             try list.append(gpa, 0);
+            //         },
+            //         else => unreachable,
+            //     }
+            // }
+            pub fn ser(self: Self, w: *DBusWriter) !void {
                 switch (r) {
-                    's' => {
-                        try list.appendSlice(gpa, &convertIntegrer(u32, len, .big));
-                        try list.appendSlice(gpa, self.value);
-                        try list.append(gpa, 0);
-                    },
-                    'o' => {
-                        // TODO: check if is valid object path
-                        try list.appendSlice(gpa, &convertIntegrer(u32, len, .big));
-                        try list.appendSlice(gpa, self.value);
-                        try list.append(gpa, 0);
+                    's', 'o' => {
+                        try w.padTo(4);
+                        const len_u32: u32 = @intCast(self.value.len); // not including NUL
+                        try w.writeInt(u32, len_u32);
+                        try w.buffer.appendSlice(w.gpa, self.value);
+                        try w.buffer.append(w.gpa, 0);
                     },
                     'g' => {
-                        try list.append(gpa, @as(u8, @truncate(len)));
-                        try list.appendSlice(gpa, self.value);
-                        try list.append(gpa, 0);
+                        try w.padTo(1);
+                        const n = self.value.len;
+                        if (n > 255) return error.SignatureTooLong;
+                        try w.buffer.append(w.gpa, @as(u8, @intCast(n)));
+                        try w.buffer.appendSlice(w.gpa, self.value);
+                        try w.buffer.append(w.gpa, 0);
                     },
                     else => unreachable,
                 }
@@ -470,9 +665,9 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
-                const x: u32 = @intFromBool(self.value);
-                try list.appendSlice(gpa, &convertIntegrer(u32, x, .big));
+            pub fn ser(self: Self, w: *DBusWriter) !void {
+                try w.padTo(dbusAlignOf(bool)); // 4
+                try w.writeInt(u32, @intFromBool(self.value));
             }
         };
     }
@@ -495,9 +690,9 @@ pub const Value = struct {
                 };
             }
 
-            pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
-                const slice = convertIntegrer(u32, self.value, .big);
-                try list.appendSlice(gpa, &slice);
+            pub fn ser(self: Self, w: *DBusWriter) !void {
+                try w.padTo(4);
+                try w.writeInt(u32, self.handle);
             }
         };
     }
@@ -525,54 +720,108 @@ pub const Value = struct {
 };
 
 pub const Serializer = struct {
-    fn trySerialize(comptime T: type, data: T, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+    // fn trySerialize(comptime T: type, data: T, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
+    //     if (T == GStr) {
+    //         try Value.String().new(data).ser(buffer, gpa);
+    //     } else if (T == GPath) {
+    //         try Value.ObjectPath().new(data).ser(buffer, gpa);
+    //     } else if (T == GSig) {
+    //         try Value.Signature().new(data).ser(buffer, gpa);
+    //     } else if (T == GUFd) {
+    //         try Value.UnixFd().new(data).ser(buffer, gpa);
+    //     } else {
+    //         switch (@typeInfo(T)) {
+    //             .int => |info| {
+    //                 if (info.bits == 16) {
+    //                     if (info.signedness == .signed) {
+    //                         try Value.Int16().new(data).ser(buffer, gpa);
+    //                     } else {
+    //                         try Value.Uint16().new(data).ser(buffer, gpa);
+    //                     }
+    //                 } else if (info.bits == 32) {
+    //                     if (info.signedness == .signed) {
+    //                         try Value.Int32().new(data).ser(buffer, gpa);
+    //                     } else {
+    //                         try Value.Uint32().new(data).ser(buffer, gpa);
+    //                     }
+    //                 } else if (info.bits == 64) {
+    //                     if (info.signedness == .signed) {
+    //                         try Value.Int64().new(data).ser(buffer, gpa);
+    //                     } else {
+    //                         try Value.Uint64().new(data).ser(buffer, gpa);
+    //                     }
+    //                 } else if (info.bits == 8) {
+    //                     if (info.signedness == .unsigned) {
+    //                         try Value.Byte().new(data).ser(buffer, gpa);
+    //                     } else {
+    //                         return error.I8CannotBeSerialized;
+    //                     }
+    //                 }
+    //             },
+    //             .float => |info| {
+    //                 if (info.bits != 64) {
+    //                     return error.F32CannotBeSerialized;
+    //                 }
+    //                 try Value.Double().new(data).ser(buffer, gpa);
+    //             },
+    //             .bool => {
+    //                 try Value.Bool().new(data).ser(buffer, gpa);
+    //             },
+    //         }
+    //     }
+    // }
+    pub fn trySerialize(comptime T: type, data: T, w: *DBusWriter) !void {
         if (T == GStr) {
-            try Value.String().new(data).ser(buffer, gpa);
+            try Value.String().new(data.s).ser(w);
+            return;
         } else if (T == GPath) {
-            try Value.ObjectPath().new(data).ser(buffer, gpa);
+            try Value.ObjectPath().new(data.s).ser(w);
+            return;
         } else if (T == GSig) {
-            try Value.Signature().new(data).ser(buffer, gpa);
+            try Value.Signature().new(data.s).ser(w);
+            return;
         } else if (T == GUFd) {
-            try Value.UnixFd().new(data).ser(buffer, gpa);
-        } else {
-            switch (@typeInfo(T)) {
-                .int => |info| {
-                    if (info.bits == 16) {
-                        if (info.signedness == .signed) {
-                            try Value.Int16().new(data).ser(buffer, gpa);
-                        } else {
-                            try Value.Uint16().new(data).ser(buffer, gpa);
-                        }
-                    } else if (info.bits == 32) {
-                        if (info.signedness == .signed) {
-                            try Value.Int32().new(data).ser(buffer, gpa);
-                        } else {
-                            try Value.Uint32().new(data).ser(buffer, gpa);
-                        }
-                    } else if (info.bits == 64) {
-                        if (info.signedness == .signed) {
-                            try Value.Int64().new(data).ser(buffer, gpa);
-                        } else {
-                            try Value.Uint64().new(data).ser(buffer, gpa);
-                        }
-                    } else if (info.bits == 8) {
-                        if (info.signedness == .unsigned) {
-                            try Value.Byte().new(data).ser(buffer, gpa);
-                        } else {
-                            return error.I8CannotBeSerialized;
-                        }
-                    }
-                },
-                .float => |info| {
-                    if (info.bits != 64) {
-                        return error.F32CannotBeSerialized;
-                    }
-                    try Value.Double().new(data).ser(buffer, gpa);
-                },
-                .bool => {
-                    try Value.Bool().new(data).ser(buffer, gpa);
-                },
-            }
+            try Value.UnixFd().new(data.fd).ser(w);
+            return;
+        }
+
+        switch (@typeInfo(T)) {
+            .int => |info| {
+                if (info.bits == 8 and info.signedness == .signed) return error.I8CannotBeSerialized;
+                if (info.bits == 8) try Value.Byte().new(@as(u8, data)).ser(w) else if (info.bits == 16) if (info.signedness == .signed)
+                    try Value.Int16().new(@as(i16, data)).ser(w)
+                else
+                    try Value.Uint16().new(@as(u16, data)).ser(w) else if (info.bits == 32) if (info.signedness == .signed)
+                    try Value.Int32().new(@as(i32, data)).ser(w)
+                else
+                    try Value.Uint32().new(@as(u32, data)).ser(w) else if (info.bits == 64) if (info.signedness == .signed)
+                    try Value.Int64().new(@as(i64, data)).ser(w)
+                else
+                    try Value.Uint64().new(@as(u64, data)).ser(w) else return error.UnsupportedIntWidth;
+            },
+            .float => |info| {
+                if (info.bits != 64) return error.F32CannotBeSerialized;
+                try Value.Double().new(@as(f64, data)).ser(w);
+            },
+            .bool => {
+                try Value.Bool().new(data).ser(w);
+            },
+            .array => |ai| {
+                const Elem = ai.child;
+                const slice_view = data[0..];
+                try Value.Array(Elem).new(slice_view).ser(w);
+            },
+            .@"struct" => |sinfo| {
+                if (sinfo.is_tuple) {
+                    try Value.Tuple(T).new(data).ser(w);
+                } else {
+                    try Value.Struct(T).new(data).ser(w);
+                }
+            },
+            .@"union" => |_| {
+                try Value.Variant(T).new(data).ser(w);
+            },
+            else => return error.UnsupportedTypeForNow,
         }
     }
 };
