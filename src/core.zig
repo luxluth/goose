@@ -1,5 +1,6 @@
 pub const std = @import("std");
 const Endian = std.builtin.Endian;
+const NATIVE_ENDIAN = @import("builtin").target.cpu.arch.endian();
 
 pub const utils = @import("utils.zig");
 pub const value = @import("value.zig");
@@ -209,7 +210,7 @@ pub const MessageHeader = struct {
     /// Endianness flag; ASCII 'l' for little-endian or ASCII 'B' for big-endian.
     /// Both header and body are in this endianness.
     /// By default this library default to little-endian
-    endianess: Endian = .little,
+    endianess: Endian = NATIVE_ENDIAN,
     /// Message type. Unknown types must be ignored
     message_type: MessageType,
     /// Bitwise OR of flags. Unknown flags must be ignored.

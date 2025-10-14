@@ -50,6 +50,7 @@ pub const Connection = struct {
         }
 
         try io_writer.print("BEGIN\r\n", .{});
+        try io_writer.flush();
     }
 
     pub fn init(allocator: std.mem.Allocator) !Connection {
@@ -62,11 +63,43 @@ pub const Connection = struct {
 
         try auth(socket);
 
-        return Connection{
+        var conn = Connection{
             .__inner_sock = socket,
             .__allocator = allocator,
             .serial_counter = 1,
         };
+
+        try conn.sayHello();
+
+        return conn;
+    }
+
+    fn sayHello(self: *Connection) !void {
+        const serial = self.serial_counter;
+        defer self.serial_counter += 1;
+
+        const header = core.MessageHeader{
+            .message_type = core.MessageType.MethodCall,
+            .flags = @intFromEnum(core.MessageFlag.__EMPTY),
+            .proto_version = 1,
+            .body_length = 0,
+            .serial = serial,
+            .header_fields = @constCast(&[_]core.HeaderField{
+                .{ .code = core.HeaderFieldCode.Destination, .value = .{ .Destination = "org.freedesktop.DBus" } },
+                .{ .code = core.HeaderFieldCode.Interface, .value = .{ .Interface = "org.freedesktop.DBus" } },
+                .{ .code = core.HeaderFieldCode.Path, .value = .{ .Path = "/org/freedesktop/DBus" } },
+                .{ .code = core.HeaderFieldCode.Member, .value = .{ .Member = "Hello" } },
+                // .{ .code = core.HeaderFieldCode.Signature, .value = .{ .Signature = "()" } },
+            }),
+        };
+
+        const body = std.ArrayList(u8).empty;
+
+        const message = core.Message.new(header, body.items);
+        var bytes = try message.pack(self.__allocator);
+        std.debug.print("{any}\n", .{header.header_fields});
+        defer bytes.deinit(self.__allocator);
+        try self.sendBytesAndWaitForAnswer(bytes.items, serial);
     }
 
     /// This function closes the underlined socket
@@ -112,13 +145,12 @@ pub const Connection = struct {
                 .{ .code = core.HeaderFieldCode.Path, .value = .{ .Path = "/org/freedesktop/DBus" } },
                 .{ .code = core.HeaderFieldCode.Member, .value = .{ .Member = "RequestName" } },
                 .{ .code = core.HeaderFieldCode.Signature, .value = .{ .Signature = "su" } },
+                // .{ .code = core.HeaderFieldCode.ReplySerial, .value = .{ .ReplySerial = serial } },
             }),
         };
 
         const message = core.Message.new(header, body_arr.items);
         var bytes = try message.pack(self.__allocator);
-        // const tt = Value.Struct(core.MessageHeader).new(header);
-        // std.debug.print("{s} ~ {any}\n", .{ tt.repr, message });
         std.debug.print("{any}\n", .{header.header_fields});
         defer bytes.deinit(self.__allocator);
         try self.sendBytesAndWaitForAnswer(bytes.items, serial);
@@ -143,7 +175,12 @@ pub const Connection = struct {
     }
 
     fn sendBytesAndWaitForAnswer(self: *Connection, data: []u8, serial: u32) !void {
-        try self.__inner_sock.writeAll(data);
+        var writer_buffer: [2048]u8 = undefined;
+        var writer = self.__inner_sock.writer(&writer_buffer);
+        var io_writer = &writer.interface;
+        try io_writer.writeAll(data);
+        try io_writer.flush();
+
         std.debug.print("[:{d}:SEND] -> {d} bytes\n", .{ serial, data.len });
 
         var rbuf: [8192]u8 = undefined;
@@ -158,7 +195,7 @@ pub const Connection = struct {
             else => return error.BadEndianFlag,
         };
 
-        const mtype: u8 = hdr4[1];
+        const mtype: core.MessageType = @enumFromInt(hdr4[1]);
         _ = hdr4[2]; // flags
         _ = hdr4[3]; // version
 
@@ -181,6 +218,9 @@ pub const Connection = struct {
         const fields_bytes = try self.__allocator.alloc(u8, fields_len);
         defer self.__allocator.free(fields_bytes);
         try readExact(io_reader, fields_bytes);
+        // \5\1u\0\1\0\0\0\7\1s\0\20\0\0\0org.freedesktop.DBus\0\0\0\0\6\1s\0\5\0\0\0\581.88\0\0\0\8\1g\0\1s\0
+        // \7\1s\0\20\0\0\0org.freedesktop.DBus\0\0\0\0\6\1s\0\5\0\0\0\581.88\0\0\0\1\1o\0\21\0\0\0/org/freedesktop/DBus\0\0\0\2\1s\0\20\0\0\0org.freedesktop.DBus\0\0\0\0\3\1s\0\12\0\0\0NameAcquired\0\0\0\0\8\1g\0\1s\0
+        std.debug.print("{any}\n", .{fields_bytes});
         off += fields_len;
 
         // --- pad header to 8, then read body ---
@@ -194,7 +234,7 @@ pub const Connection = struct {
         // For a production client, loop reading messages until you find:
         //   mtype in {MethodReturn, Error} AND header.ReplySerial == serial
 
-        std.debug.print("RECV type={d} serial={d} body_len={d}\n", .{ mtype, msg_serial, body_len });
+        std.debug.print("RECV type={any} serial={d} body_len={d}\n", .{ mtype, msg_serial, body_len });
         // TODO: decode body according to header Signature if you need the return value
     }
 };

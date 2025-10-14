@@ -9,6 +9,7 @@ pub inline fn convertInteger(comptime T: type, x: T, endianess: std.builtin.Endi
 }
 
 pub inline fn readInteger(comptime T: type, data: *const [4]u8, endianess: std.builtin.Endian) T {
+    std.debug.print("data = {any}\n", .{data});
     return switch (endianess) {
         .little => std.mem.littleToNative(T, std.mem.bytesToValue(T, data)),
         .big => std.mem.bigToNative(T, std.mem.bytesToValue(T, data)),
