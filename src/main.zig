@@ -31,5 +31,17 @@ pub fn main() !void {
     var conn = try Connection.init(allocator);
     defer conn.close();
 
-    try conn.requestName("dev.goose.zig");
+    var reply = try conn.methodCall(
+        "org.freedesktop.DBus",
+        "/org/freedesktop/DBus",
+        "org.freedesktop.DBus",
+        "GetId",
+        null,
+        &.{},
+    );
+    defer conn.freeMessage(&reply);
+
+    if (reply.body.len >= 4) {
+        std.debug.print("Bus ID: {s}\n", .{reply.body[4..]});
+    }
 }

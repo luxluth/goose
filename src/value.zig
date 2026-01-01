@@ -263,16 +263,6 @@ pub const Value = struct {
                 };
             }
 
-            // pub fn ser(self: Self, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
-            //     const array_data_length = @sizeOf(T) * self.inner.len;
-            //     if (array_data_length > std.math.pow(u32, 2, 26))
-            //         return error.ArraySizeExceeded;
-            //     const alignment = @alignOf(T);
-            //     const padded_length = alignUp(array_data_length, alignment);
-            //     const new_array = try buffer.addManyAsSlice(gpa, @sizeOf(u32) + padded_length);
-            //     const len = new_array[0..4];
-            //     len.* = &convertInteger(u32, array_data_length, .big);
-            // }
             pub fn ser(self: Self, w: *DBusWriter) !void {
                 // 4-align for array container
                 try w.padTo(4);
@@ -519,17 +509,6 @@ pub const Value = struct {
                 };
             }
 
-            // pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
-            //     switch (@typeInfo(T)) {
-            //         .int => {
-            //             const slice = convertInteger(T, self.value, .big);
-            //             try list.appendSlice(gpa, &slice);
-            //         },
-            //         else => {
-            //             try list.appendSlice(gpa, &std.mem.toBytes(self.value));
-            //         },
-            //     }
-            // }
             pub fn ser(self: Self, w: *DBusWriter) !void {
                 try w.padTo(dbusAlignOf(T));
                 switch (@typeInfo(T)) {
@@ -560,28 +539,6 @@ pub const Value = struct {
                 };
             }
 
-            // pub fn ser(self: Self, list: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
-            //     const len: u32 = @intCast(self.value.len);
-            //     switch (r) {
-            //         's' => {
-            //             try list.appendSlice(gpa, &convertInteger(u32, len, .big));
-            //             try list.appendSlice(gpa, self.value);
-            //             try list.append(gpa, 0);
-            //         },
-            //         'o' => {
-            //             // TODO: check if is valid object path
-            //             try list.appendSlice(gpa, &convertInteger(u32, len, .big));
-            //             try list.appendSlice(gpa, self.value);
-            //             try list.append(gpa, 0);
-            //         },
-            //         'g' => {
-            //             try list.append(gpa, @as(u8, @truncate(len)));
-            //             try list.appendSlice(gpa, self.value);
-            //             try list.append(gpa, 0);
-            //         },
-            //         else => unreachable,
-            //     }
-            // }
             pub fn ser(self: Self, w: *DBusWriter) !void {
                 switch (r) {
                     's', 'o' => {
@@ -720,56 +677,6 @@ pub const Value = struct {
 };
 
 pub const Serializer = struct {
-    // fn trySerialize(comptime T: type, data: T, buffer: *std.ArrayList(u8), gpa: std.mem.Allocator) !void {
-    //     if (T == GStr) {
-    //         try Value.String().new(data).ser(buffer, gpa);
-    //     } else if (T == GPath) {
-    //         try Value.ObjectPath().new(data).ser(buffer, gpa);
-    //     } else if (T == GSig) {
-    //         try Value.Signature().new(data).ser(buffer, gpa);
-    //     } else if (T == GUFd) {
-    //         try Value.UnixFd().new(data).ser(buffer, gpa);
-    //     } else {
-    //         switch (@typeInfo(T)) {
-    //             .int => |info| {
-    //                 if (info.bits == 16) {
-    //                     if (info.signedness == .signed) {
-    //                         try Value.Int16().new(data).ser(buffer, gpa);
-    //                     } else {
-    //                         try Value.Uint16().new(data).ser(buffer, gpa);
-    //                     }
-    //                 } else if (info.bits == 32) {
-    //                     if (info.signedness == .signed) {
-    //                         try Value.Int32().new(data).ser(buffer, gpa);
-    //                     } else {
-    //                         try Value.Uint32().new(data).ser(buffer, gpa);
-    //                     }
-    //                 } else if (info.bits == 64) {
-    //                     if (info.signedness == .signed) {
-    //                         try Value.Int64().new(data).ser(buffer, gpa);
-    //                     } else {
-    //                         try Value.Uint64().new(data).ser(buffer, gpa);
-    //                     }
-    //                 } else if (info.bits == 8) {
-    //                     if (info.signedness == .unsigned) {
-    //                         try Value.Byte().new(data).ser(buffer, gpa);
-    //                     } else {
-    //                         return error.I8CannotBeSerialized;
-    //                     }
-    //                 }
-    //             },
-    //             .float => |info| {
-    //                 if (info.bits != 64) {
-    //                     return error.F32CannotBeSerialized;
-    //                 }
-    //                 try Value.Double().new(data).ser(buffer, gpa);
-    //             },
-    //             .bool => {
-    //                 try Value.Bool().new(data).ser(buffer, gpa);
-    //             },
-    //         }
-    //     }
-    // }
     pub fn trySerialize(comptime T: type, data: T, w: *DBusWriter) !void {
         if (T == GStr) {
             try Value.String().new(data.s).ser(w);
