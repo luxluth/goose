@@ -4,6 +4,7 @@ const message = @import("message_utils.zig");
 const Connection = @import("root.zig").Connection;
 const BodyEncoder = message.BodyEncoder;
 const BodyDecoder = message.BodyDecoder;
+const GStr = core.value.GStr;
 
 /// Result of a D-Bus method call.
 /// Owns the reply message and provides methods to decode its body.
@@ -48,25 +49,53 @@ pub const Proxy = struct {
         };
     }
 
-    /// Invokes a method on the remote object.
-    /// `args` can be a single value or a tuple of values.
-    /// Returns a MethodResult owning the reply message.
-    pub fn call(self: Proxy, method: [:0]const u8, args: anytype) !MethodResult {
+    fn rawCall(self: Proxy, iface: [:0]const u8, method: [:0]const u8, args: anytype) !MethodResult {
         var encoder = try BodyEncoder.encode(self.conn.__allocator, args);
         defer encoder.deinit();
 
         const reply = try self.conn.methodCall(
             self.dest,
             self.path,
-            self.interface,
+            iface,
             method,
             encoder.signature(),
             encoder.body(),
         );
 
+        if (reply.isError()) {
+            const err_name = reply.getErrorName() orelse "UnknownError";
+            var decoder = BodyDecoder.fromMessage(self.conn.__allocator, reply);
+            const err_msg = decoder.decode(GStr) catch GStr.new("(no error message)");
+            std.debug.print("[goose] DBus Error: {s}: {s}\n", .{ err_name, err_msg.s });
+            self.conn.freeMessage(@constCast(&reply));
+            return error.RemoteError;
+        }
+
         return MethodResult{
             .msg = reply,
             .conn = self.conn,
         };
+    }
+
+    /// Invokes a method on the remote object.
+    /// `args` can be a single value or a tuple of values.
+    /// Returns a MethodResult owning the reply message.
+    pub fn call(self: Proxy, method: [:0]const u8, args: anytype) !MethodResult {
+        return self.rawCall(self.interface, method, args);
+    }
+
+    /// Helper to get a property value.
+    /// T must be a union (Variant) that can hold the expected property type.
+    /// D-Bus Get returns a Variant ('v').
+    pub fn getProperty(self: Proxy, comptime T: type, name: [:0]const u8) !T {
+        var result = try self.rawCall("org.freedesktop.DBus.Properties", "Get", .{ GStr.new(self.interface), GStr.new(name) });
+        return result.expect(T);
+    }
+
+    /// Helper to set a property value.
+    /// `value` must be a union (Variant) representing the new value.
+    pub fn setProperty(self: Proxy, name: [:0]const u8, value: anytype) !void {
+        var result = try self.rawCall("org.freedesktop.DBus.Properties", "Set", .{ GStr.new(self.interface), GStr.new(name), value });
+        result.deinit();
     }
 };

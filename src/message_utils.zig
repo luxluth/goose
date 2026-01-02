@@ -134,6 +134,52 @@ pub const BodyDecoder = struct {
         return self.readVal(T);
     }
 
+    /// Decodes the next value of type T and allocates memory for it (recursive deep-copy).
+    /// This allows the returned value to outlive the decoder and the message body.
+    pub fn decodeAlloc(self: *BodyDecoder, comptime T: type) anyerror!T {
+        const val = try self.decode(T);
+        return try self.cloneVal(T, val);
+    }
+
+    fn cloneVal(self: *BodyDecoder, comptime T: type, val: T) anyerror!T {
+        switch (@typeInfo(T)) {
+            .int, .bool, .float, .@"enum" => return val,
+            .@"struct" => |info| {
+                if (T == core.value.GStr or T == core.value.GPath or T == core.value.GSig) {
+                    const s = try self.allocator.allocSentinel(u8, val.s.len, 0);
+                    @memcpy(s, val.s);
+                    return T.new(s);
+                }
+                var result: T = undefined;
+                inline for (info.fields) |fld| {
+                    @field(result, fld.name) = try self.cloneVal(fld.type, @field(val, fld.name));
+                }
+                return result;
+            },
+            .pointer => |info| {
+                if (info.size != .slice) return error.UnsupportedType;
+                const Elem = info.child;
+                const new_slice = try self.allocator.alloc(Elem, val.len);
+                errdefer self.allocator.free(new_slice);
+
+                for (val, 0..) |v, i| {
+                    new_slice[i] = try self.cloneVal(Elem, v);
+                }
+                return new_slice;
+            },
+            .@"union" => |info| {
+                const tag = std.meta.activeTag(val);
+                inline for (info.fields) |fld| {
+                    if (std.mem.eql(u8, fld.name, @tagName(tag))) {
+                        return @unionInit(T, fld.name, try self.cloneVal(fld.type, @field(val, fld.name)));
+                    }
+                }
+                unreachable;
+            },
+            else => return error.UnsupportedType,
+        }
+    }
+
     fn readVal(self: *BodyDecoder, comptime T: type) anyerror!T {
         switch (@typeInfo(T)) {
             .int => |info| {

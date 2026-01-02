@@ -35,11 +35,19 @@ const DBusReader = struct {
     }
 };
 
+pub const SignalHandler = struct {
+    interface: []const u8,
+    member: []const u8,
+    callback: *const fn (ctx: ?*anyopaque, msg: core.Message) void,
+    ctx: ?*anyopaque,
+};
+
 pub const Connection = struct {
     __inner_sock: net.Stream,
     __allocator: std.mem.Allocator,
     serial_counter: u32 = 1,
     pending_messages: std.ArrayList(core.Message),
+    signal_handlers: std.ArrayList(SignalHandler),
 
     fn auth(socket: net.Stream) !void {
         var reader_buffer: [2048]u8 = undefined;
@@ -71,7 +79,6 @@ pub const Connection = struct {
         try io_writer.flush();
 
         const response = try io_reader.takeDelimiterInclusive('\n');
-        std.debug.print("[goose] handshake :: RESPONSE = {s}", .{response});
         if (!std.mem.startsWith(u8, response, "OK")) {
             return error.HandshakeFail;
         }
@@ -86,7 +93,6 @@ pub const Connection = struct {
 
         const socket_path = try extractUnixSocketPath(bus_address);
         const socket = try net.connectUnixSocket(socket_path);
-        std.debug.print("[goose] debug :: Connected to D-Bus at: {s}\n", .{socket_path});
 
         try auth(socket);
 
@@ -94,6 +100,7 @@ pub const Connection = struct {
             .__inner_sock = socket,
             .__allocator = allocator,
             .pending_messages = try std.ArrayList(core.Message).initCapacity(allocator, 10),
+            .signal_handlers = try std.ArrayList(SignalHandler).initCapacity(allocator, 0),
         };
 
         try conn.sayHello();
@@ -136,6 +143,7 @@ pub const Connection = struct {
             self.freeMessage(msg);
         }
         self.pending_messages.deinit(self.__allocator);
+        self.signal_handlers.deinit(self.__allocator);
         self.__inner_sock.close();
     }
 
@@ -258,25 +266,41 @@ pub const Connection = struct {
         self.__allocator.free(msg.header.header_fields);
     }
 
+    pub fn registerSignalHandler(self: *Connection, interface: []const u8, member: []const u8, callback: *const fn (ctx: ?*anyopaque, msg: core.Message) void, ctx: ?*anyopaque) !void {
+        try self.signal_handlers.append(self.__allocator, .{
+            .interface = interface,
+            .member = member,
+            .callback = callback,
+            .ctx = ctx,
+        });
+    }
+
     /// Blocks until a message is received and returns it.
     /// This will return messages from the pending queue first.
+    /// Signals that match a registered handler will be dispatched automatically and NOT returned.
     pub fn waitMessage(self: *Connection) !core.Message {
-        const msg = if (self.pending_messages.items.len > 0)
-            self.pending_messages.orderedRemove(0)
-        else
-            try self.readNextMessage();
+        while (true) {
+            const msg = if (self.pending_messages.items.len > 0)
+                self.pending_messages.orderedRemove(0)
+            else
+                try self.readNextMessage();
 
-        var iface: []const u8 = "(none)";
-        var member: []const u8 = "(none)";
-        for (msg.header.header_fields) |f| {
-            switch (f.value) {
-                .Interface => |s| iface = s,
-                .Member => |s| member = s,
-                else => {},
+            if (msg.header.message_type == .Signal) {
+                var dispatched = false;
+                for (self.signal_handlers.items) |handler| {
+                    if (msg.isSignal(handler.interface, handler.member)) {
+                        handler.callback(handler.ctx, msg);
+                        dispatched = true;
+                    }
+                }
+                if (dispatched) {
+                    self.freeMessage(@constCast(&msg));
+                    continue;
+                }
             }
-        }
 
-        return msg;
+            return msg;
+        }
     }
 
     fn readNextMessage(self: *Connection) !core.Message {

@@ -8,6 +8,40 @@ const Value = core.value.Value;
 const GStr = core.value.GStr;
 const Connection = goose.Connection;
 
+// Signal handler callback
+fn onPropertiesChanged(ctx: ?*anyopaque, msg: core.Message) void {
+    const allocator: std.mem.Allocator = @as(*const std.mem.Allocator, @ptrCast(@alignCast(ctx orelse return))).*;
+
+    const PropValue = union(enum) {
+        String: GStr,
+        Bool: bool,
+        Uint32: u32,
+        Int32: i32,
+        Double: f64,
+    };
+    const ChangedProp = struct { key: GStr, value: PropValue };
+
+    var decoder = message.BodyDecoder.fromMessage(allocator, msg);
+
+    const interface_name = decoder.decode(GStr) catch return;
+    const changed_props = decoder.decode([]const ChangedProp) catch return;
+    defer allocator.free(changed_props);
+    const invalidated_props = decoder.decode([]const GStr) catch return;
+    defer allocator.free(invalidated_props);
+
+    std.debug.print("SIGNAL [Callback]: PropertiesChanged on interface '{s}'\n", .{interface_name.s});
+    for (changed_props) |prop| {
+        std.debug.print(" - Changed: {s} = ", .{prop.key.s});
+        switch (prop.value) {
+            .String => |s| std.debug.print("'{s}'\n", .{s.s}),
+            .Bool => |b| std.debug.print("{}\n", .{b}),
+            .Uint32 => |u| std.debug.print("{d}\n", .{u}),
+            .Int32 => |i| std.debug.print("{d}\n", .{i}),
+            .Double => |d| std.debug.print("{d}\n", .{d}),
+        }
+    }
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -132,57 +166,58 @@ pub fn main() !void {
         std.debug.print("Proxy NameHasOwner: {}\n", .{has_owner});
     }
 
-    // Example 6: Listening to Signals (All)
+    // Example 7: Error Handling Test
     {
-        std.debug.print("\nListening to ALL signals... (Ctrl+C to quit)\n", .{});
-        try conn.addMatch("type='signal'");
+        std.debug.print("\nTesting Proxy Error Handling (calling non-existent method)...\n", .{});
+        const dbus_proxy = proxy.Proxy.init(&conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus");
 
-        const PropValue = union(enum) {
-            String: GStr,
-            Bool: bool,
-            Uint32: u32,
-            Int32: i32,
-            Double: f64,
+        _ = dbus_proxy.call("ThisMethodDoesNotExist", .{}) catch |err| {
+            std.debug.print("Caught expected error: {any}\n", .{err});
         };
-        const ChangedProp = struct { key: GStr, value: PropValue };
+    }
+
+    // Example 8: Property Access Test
+    {
+        std.debug.print("\nTesting Property Access (Notifications Dnd)...\n", .{});
+        const noti_proxy = proxy.Proxy.init(&conn, "org.freedesktop.Notifications", "/org/freedesktop/Notifications", "org.freedesktop.Notifications");
+
+        const NotiProp = union(enum) { Bool: bool, String: GStr };
+        const dnd = try noti_proxy.getProperty(NotiProp, "Dnd");
+        std.debug.print("Notifications Dnd: {}\n", .{dnd.Bool});
+    }
+
+    // Example 9: Owned Decoding Test
+    {
+        std.debug.print("\nTesting Owned Decoding (decodeAlloc)...\n", .{});
+        const dbus_proxy = proxy.Proxy.init(&conn, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus");
+        var result = try dbus_proxy.call("GetId", .{});
+
+        var decoder = result.reader();
+        // Decode and copy string
+        const owned_id = try decoder.decodeAlloc(GStr);
+
+        // Free result immediately
+        result.deinit();
+
+        // owned_id should still be valid
+        std.debug.print("Owned Bus ID (after deinit): {s}\n", .{owned_id.s});
+        allocator.free(owned_id.s);
+    }
+
+    // Example 6: Listening to Signals (Callback based)
+    {
+        std.debug.print("\nListening to signals via Dispatcher... (Ctrl+C to quit)\n", .{});
+        try conn.addMatch("type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'");
+
+        // Register our callback
+        try conn.registerSignalHandler("org.freedesktop.DBus.Properties", "PropertiesChanged", onPropertiesChanged, @ptrCast(@constCast(&allocator)));
 
         while (true) {
             var msg = try conn.waitMessage();
             defer conn.freeMessage(&msg);
-
-            if (msg.isSignal("org.freedesktop.DBus.Properties", "PropertiesChanged")) {
-                var decoder = message.BodyDecoder.fromMessage(allocator, msg);
-
-                const interface_name = try decoder.decode(GStr);
-                const changed_props = try decoder.decode([]const ChangedProp);
-                defer allocator.free(changed_props);
-                const invalidated_props = try decoder.decode([]const GStr);
-                defer allocator.free(invalidated_props);
-
-                std.debug.print("SIGNAL: PropertiesChanged on interface '{s}'\n", .{interface_name.s});
-                for (changed_props) |prop| {
-                    std.debug.print(" - Changed: {s} = ", .{prop.key.s});
-                    switch (prop.value) {
-                        .String => |s| std.debug.print("'{s}'\n", .{s.s}),
-                        .Bool => |b| std.debug.print("{}\n", .{b}),
-                        .Uint32 => |u| std.debug.print("{d}\n", .{u}),
-                        .Int32 => |i| std.debug.print("{d}\n", .{i}),
-                        .Double => |d| std.debug.print("{d}\n", .{d}),
-                    }
-                }
-            } else {
-                // For other signals, just print the name
-                var siface: []const u8 = "(none)";
-                var smember: []const u8 = "(none)";
-                for (msg.header.header_fields) |f| {
-                    switch (f.value) {
-                        .Interface => |s| siface = s,
-                        .Member => |s| smember = s,
-                        else => {},
-                    }
-                }
-                std.debug.print("SIGNAL: interface='{s}', member='{s}'\n", .{ siface, smember });
-            }
+            // waitMessage automatically dispatches registered handlers.
+            // Other messages (like NameAcquired) will be returned here and printed by waitMessage debug.
         }
     }
 }
+

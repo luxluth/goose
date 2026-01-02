@@ -329,12 +329,30 @@ pub const Message = struct {
 
         for (self.header.header_fields) |f| {
             switch (f.value) {
-                .Interface => |s| if (std.mem.eql(u8, s, interface)) { has_iface = true; },
-                .Member => |s| if (std.mem.eql(u8, s, member)) { has_member = true; },
+                .Interface => |s| if (std.mem.eql(u8, s, interface)) {
+                    has_iface = true;
+                },
+                .Member => |s| if (std.mem.eql(u8, s, member)) {
+                    has_member = true;
+                },
                 else => {},
             }
         }
         return has_iface and has_member;
+    }
+
+    /// Checks if the message is an Error.
+    pub fn isError(self: Message) bool {
+        return self.header.message_type == .Error;
+    }
+
+    /// Returns the ErrorName if the message is an Error, otherwise null.
+    pub fn getErrorName(self: Message) ?[]const u8 {
+        if (!self.isError()) return null;
+        for (self.header.header_fields) |f| {
+            if (f.code == .ErrorName) return f.value.ErrorName;
+        }
+        return null;
     }
 };
 
