@@ -14,7 +14,7 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "goose-test",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+            .root_source_file = b.path("src/tests/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -29,15 +29,51 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const run_step = b.step("run", "Run the app");
+    const run_step = b.step("test-app", "Run the test app");
     run_step.dependOn(&run_cmd.step);
+
+    const intro_exe = b.addExecutable(.{
+        .name = "goose-introspection",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/introspector.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "goose", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(intro_exe);
+    const run_intro = b.addRunArtifact(intro_exe);
+    if (b.args) |args| {
+        run_intro.addArgs(args);
+    }
+    const intro_step = b.step("introspection", "Run the introspection demo");
+    intro_step.dependOn(&run_intro.step);
+
+    const gen_exe = b.addExecutable(.{
+        .name = "goose-generate",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/generate_proxy.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "goose", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(gen_exe);
+
+    const run_gen = b.addRunArtifact(gen_exe);
+    if (b.args) |args| {
+        run_gen.addArgs(args);
+    }
+    const gen_step = b.step("generate", "Generate Zig proxy from D-Bus introspection");
+    gen_step.dependOn(&run_gen.step);
 
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
-
-    // lib_unit_tests.linkLibC();
-    // lib_unit_tests.linkSystemLibrary("dbus-1");
 
     const run_mod_tests = b.addRunArtifact(mod_tests);
 

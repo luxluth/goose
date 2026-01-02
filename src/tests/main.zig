@@ -9,38 +9,38 @@ const GStr = core.value.GStr;
 const Connection = goose.Connection;
 
 // Signal handler callback
-fn onPropertiesChanged(ctx: ?*anyopaque, msg: core.Message) void {
-    const allocator: std.mem.Allocator = @as(*const std.mem.Allocator, @ptrCast(@alignCast(ctx orelse return))).*;
-
-    const PropValue = union(enum) {
-        String: GStr,
-        Bool: bool,
-        Uint32: u32,
-        Int32: i32,
-        Double: f64,
-    };
-    const ChangedProp = struct { key: GStr, value: PropValue };
-
-    var decoder = message.BodyDecoder.fromMessage(allocator, msg);
-
-    const interface_name = decoder.decode(GStr) catch return;
-    const changed_props = decoder.decode([]const ChangedProp) catch return;
-    defer allocator.free(changed_props);
-    const invalidated_props = decoder.decode([]const GStr) catch return;
-    defer allocator.free(invalidated_props);
-
-    std.debug.print("SIGNAL [Callback]: PropertiesChanged on interface '{s}'\n", .{interface_name.s});
-    for (changed_props) |prop| {
-        std.debug.print(" - Changed: {s} = ", .{prop.key.s});
-        switch (prop.value) {
-            .String => |s| std.debug.print("'{s}'\n", .{s.s}),
-            .Bool => |b| std.debug.print("{}\n", .{b}),
-            .Uint32 => |u| std.debug.print("{d}\n", .{u}),
-            .Int32 => |i| std.debug.print("{d}\n", .{i}),
-            .Double => |d| std.debug.print("{d}\n", .{d}),
-        }
-    }
-}
+// fn onPropertiesChanged(ctx: ?*anyopaque, msg: core.Message) void {
+//     const allocator: std.mem.Allocator = @as(*const std.mem.Allocator, @ptrCast(@alignCast(ctx orelse return))).*;
+//
+//     const PropValue = union(enum) {
+//         String: GStr,
+//         Bool: bool,
+//         Uint32: u32,
+//         Int32: i32,
+//         Double: f64,
+//     };
+//     const ChangedProp = struct { key: GStr, value: PropValue };
+//
+//     var decoder = message.BodyDecoder.fromMessage(allocator, msg);
+//
+//     const interface_name = decoder.decode(GStr) catch return;
+//     const changed_props = decoder.decode([]const ChangedProp) catch return;
+//     defer allocator.free(changed_props);
+//     const invalidated_props = decoder.decode([]const GStr) catch return;
+//     defer allocator.free(invalidated_props);
+//
+//     std.debug.print("SIGNAL [Callback]: PropertiesChanged on interface '{s}'\n", .{interface_name.s});
+//     for (changed_props) |prop| {
+//         std.debug.print(" - Changed: {s} = ", .{prop.key.s});
+//         switch (prop.value) {
+//             .String => |s| std.debug.print("'{s}'\n", .{s.s}),
+//             .Bool => |b| std.debug.print("{}\n", .{b}),
+//             .Uint32 => |u| std.debug.print("{d}\n", .{u}),
+//             .Int32 => |i| std.debug.print("{d}\n", .{i}),
+//             .Double => |d| std.debug.print("{d}\n", .{d}),
+//         }
+//     }
+// }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -205,19 +205,18 @@ pub fn main() !void {
     }
 
     // Example 6: Listening to Signals (Callback based)
-    {
-        std.debug.print("\nListening to signals via Dispatcher... (Ctrl+C to quit)\n", .{});
-        try conn.addMatch("type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'");
-
-        // Register our callback
-        try conn.registerSignalHandler("org.freedesktop.DBus.Properties", "PropertiesChanged", onPropertiesChanged, @ptrCast(@constCast(&allocator)));
-
-        while (true) {
-            var msg = try conn.waitMessage();
-            defer conn.freeMessage(&msg);
-            // waitMessage automatically dispatches registered handlers.
-            // Other messages (like NameAcquired) will be returned here and printed by waitMessage debug.
-        }
-    }
+    // {
+    //     std.debug.print("\nListening to signals via Dispatcher... (Ctrl+C to quit)\n", .{});
+    //     try conn.addMatch("type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'");
+    //
+    //     // Register our callback
+    //     try conn.registerSignalHandler("org.freedesktop.DBus.Properties", "PropertiesChanged", onPropertiesChanged, @ptrCast(@constCast(&allocator)));
+    //
+    //     while (true) {
+    //         var msg = try conn.waitMessage();
+    //         defer conn.freeMessage(&msg);
+    //         // waitMessage automatically dispatches registered handlers.
+    //         // Other messages (like NameAcquired) will be returned here and printed by waitMessage debug.
+    //     }
+    // }
 }
-

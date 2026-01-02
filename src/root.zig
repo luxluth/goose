@@ -9,6 +9,8 @@ const readInteger = core.utils.readInteger;
 const convertInteger = core.utils.convertInteger;
 pub const message = @import("message_utils.zig");
 pub const proxy = @import("proxy.zig");
+pub const introspection = @import("introspection.zig");
+pub const generator = @import("generator.zig");
 
 const std = @import("std");
 const DBusReader = struct {

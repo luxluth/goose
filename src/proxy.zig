@@ -49,7 +49,7 @@ pub const Proxy = struct {
         };
     }
 
-    fn rawCall(self: Proxy, iface: [:0]const u8, method: [:0]const u8, args: anytype) !MethodResult {
+    pub fn rawCall(self: Proxy, iface: [:0]const u8, method: [:0]const u8, args: anytype) !MethodResult {
         var encoder = try BodyEncoder.encode(self.conn.__allocator, args);
         defer encoder.deinit();
 
@@ -87,9 +87,12 @@ pub const Proxy = struct {
     /// Helper to get a property value.
     /// T must be a union (Variant) that can hold the expected property type.
     /// D-Bus Get returns a Variant ('v').
+    /// The returned value is allocated using the connection's allocator if it contains strings or slices.
     pub fn getProperty(self: Proxy, comptime T: type, name: [:0]const u8) !T {
         var result = try self.rawCall("org.freedesktop.DBus.Properties", "Get", .{ GStr.new(self.interface), GStr.new(name) });
-        return result.expect(T);
+        defer result.deinit();
+        var dec = result.reader();
+        return try dec.decodeAlloc(T);
     }
 
     /// Helper to set a property value.
