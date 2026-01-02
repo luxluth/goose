@@ -320,6 +320,22 @@ pub const Message = struct {
         try header_bytes.appendSlice(allocator, self.body);
         return header_bytes;
     }
+
+    /// Checks if the message is a signal with the given interface and member names.
+    pub fn isSignal(self: Message, interface: []const u8, member: []const u8) bool {
+        if (self.header.message_type != .Signal) return false;
+        var has_iface = false;
+        var has_member = false;
+
+        for (self.header.header_fields) |f| {
+            switch (f.value) {
+                .Interface => |s| if (std.mem.eql(u8, s, interface)) { has_iface = true; },
+                .Member => |s| if (std.mem.eql(u8, s, member)) { has_member = true; },
+                else => {},
+            }
+        }
+        return has_iface and has_member;
+    }
 };
 
 // Write the header-field VARIANT ("v") given our union value.

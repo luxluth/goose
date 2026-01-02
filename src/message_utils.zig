@@ -157,7 +157,7 @@ pub const BodyDecoder = struct {
                 return @bitCast(val_bits);
             },
             .@"struct" => |info| {
-                if (T == core.value.GStr or T == core.value.GPath or T == core.value.GSig) {
+                if (T == core.value.GStr or T == core.value.GPath) {
                     // String reading: u32 len, bytes, null
                     if (self.pos + 4 > self.body.len) return error.EndOfBody;
                     const len = std.mem.readInt(u32, self.body[self.pos..][0..4], self.endian);
@@ -165,6 +165,19 @@ pub const BodyDecoder = struct {
 
                     if (self.pos + len + 1 > self.body.len) return error.EndOfBody;
                     // Verify null terminator
+                    if (self.body[self.pos + len] != 0) return error.MissingNullTerminator;
+
+                    const s = self.body[self.pos .. self.pos + len :0];
+                    self.pos += len + 1;
+
+                    return T.new(s);
+                } else if (T == core.value.GSig) {
+                    // Signature reading: u8 len, bytes, null
+                    if (self.pos + 1 > self.body.len) return error.EndOfBody;
+                    const len = self.body[self.pos];
+                    self.pos += 1;
+
+                    if (self.pos + len + 1 > self.body.len) return error.EndOfBody;
                     if (self.body[self.pos + len] != 0) return error.MissingNullTerminator;
 
                     const s = self.body[self.pos .. self.pos + len :0];
@@ -204,8 +217,25 @@ pub const BodyDecoder = struct {
                 }
                 return try list.toOwnedSlice(self.allocator);
             },
+            .@"union" => |info| {
+                // Variants on wire: signature ('g'), then aligned value.
+                const GSig = core.value.GSig;
+                const inner_sig_struct = try self.readVal(GSig);
+                const inner_sig = inner_sig_struct.s;
+
+                inline for (info.fields) |fld| {
+                    const fld_sig_len = Value.reprLength(fld.type);
+                    var fld_sig_buf: [256]u8 = undefined;
+                    Value.getRepr(fld.type, fld_sig_len, 0, fld_sig_buf[0..fld_sig_len]);
+
+                    if (std.mem.eql(u8, inner_sig, fld_sig_buf[0..fld_sig_len])) {
+                        self.alignTo(dbusAlignOf(fld.type));
+                        return @unionInit(T, fld.name, try self.readVal(fld.type));
+                    }
+                }
+                return error.NoMatchingUnionField;
+            },
             else => return error.UnsupportedType,
         }
     }
 };
-

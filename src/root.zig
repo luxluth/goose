@@ -1,15 +1,16 @@
-const std = @import("std");
 const net = std.net;
 const rand = std.crypto.random;
 
 pub const core = @import("core.zig");
-pub const message = @import("message_utils.zig");
-
 const Value = core.value.Value;
+const GStr = core.value.GStr;
 const DBusWriter = core.value.DBusWriter;
 const readInteger = core.utils.readInteger;
 const convertInteger = core.utils.convertInteger;
+pub const message = @import("message_utils.zig");
+pub const proxy = @import("proxy.zig");
 
+const std = @import("std");
 const DBusReader = struct {
     pos: usize = 0,
     reader: *std.Io.Reader,
@@ -188,6 +189,22 @@ pub const Connection = struct {
         defer self.freeMessage(&response);
     }
 
+    /// Registers interest in specific signals or messages.
+    /// `match` is a D-Bus match rule, e.g., "type='signal',interface='org.freedesktop.DBus'".
+    pub fn addMatch(self: *Connection, match: [:0]const u8) !void {
+        const encoder = try message.BodyEncoder.encode(self.__allocator, GStr.new(match));
+        // We don't care about the return value usually for AddMatch
+        var reply = try self.methodCall(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "AddMatch",
+            encoder.signature(),
+            encoder.body(),
+        );
+        self.freeMessage(&reply);
+    }
+
     pub fn methodCall(
         self: *Connection,
         dest: [:0]const u8,
@@ -239,6 +256,27 @@ pub const Connection = struct {
             }
         }
         self.__allocator.free(msg.header.header_fields);
+    }
+
+    /// Blocks until a message is received and returns it.
+    /// This will return messages from the pending queue first.
+    pub fn waitMessage(self: *Connection) !core.Message {
+        const msg = if (self.pending_messages.items.len > 0)
+            self.pending_messages.orderedRemove(0)
+        else
+            try self.readNextMessage();
+
+        var iface: []const u8 = "(none)";
+        var member: []const u8 = "(none)";
+        for (msg.header.header_fields) |f| {
+            switch (f.value) {
+                .Interface => |s| iface = s,
+                .Member => |s| member = s,
+                else => {},
+            }
+        }
+
+        return msg;
     }
 
     fn readNextMessage(self: *Connection) !core.Message {
