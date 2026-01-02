@@ -64,6 +64,7 @@ pub fn dbusAlignOf(comptime T: type) usize {
         .@"struct" => |_| 8, // struct/dict-entry container
         .@"union" => |_| 1, // 'v'
         .array => |_| 4, // 'a'
+        .pointer => |_| 4, // 'a' (slice is encoded as array)
         else => @compileError("Unsupported alignment type for D-Bus"),
     };
 }
@@ -129,11 +130,16 @@ pub const Value = struct {
                 len = 1;
             },
             .@"struct" => |info| {
-                for (info.fields) |field| {
+                inline for (info.fields) |field| {
                     len += reprLength(field.type);
                 }
 
-                if (!info.is_tuple) len += 2;
+                const is_dict_entry = info.fields.len == 2 and (std.mem.eql(u8, info.fields[0].name, "key") and std.mem.eql(u8, info.fields[1].name, "value"));
+                if (is_dict_entry) {
+                    len += 2;
+                } else if (!info.is_tuple) {
+                    len += 2;
+                }
             },
             .@"union" => |_| {
                 len = 1;
@@ -214,14 +220,19 @@ pub const Value = struct {
                 xs[real_start] = 'b';
             },
             .@"struct" => |info| {
-                if (!info.is_tuple) {
+                const is_dict_entry = info.fields.len == 2 and (std.mem.eql(u8, info.fields[0].name, "key") and std.mem.eql(u8, info.fields[1].name, "value"));
+                if (is_dict_entry) {
+                    xs[real_start] = '{';
+                    real_start += 1;
+                    xs[len - 1] = '}';
+                } else if (!info.is_tuple) {
                     xs[real_start] = '(';
                     real_start += 1;
                     xs[len - 1] = ')';
                 }
-                for (info.fields) |field| {
+                inline for (info.fields) |field| {
                     const ll = reprLength(field.type);
-                    getRepr(field.type, ll, 0, xs[real_start..(real_start + ll)]);
+                    getRepr(field.type, ll, 0, xs[real_start..][0..ll]);
                     real_start += ll;
                 }
             },
@@ -717,6 +728,12 @@ pub const Serializer = struct {
                 const Elem = ai.child;
                 const slice_view = data[0..];
                 try Value.Array(Elem).new(slice_view).ser(w);
+            },
+            .pointer => |pi| {
+                if (pi.size == .slice) {
+                    const Elem = pi.child;
+                    try Value.Array(Elem).new(data).ser(w);
+                } else return error.UnsupportedTypeForNow;
             },
             .@"struct" => |sinfo| {
                 if (sinfo.is_tuple) {

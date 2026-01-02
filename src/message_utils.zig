@@ -1,4 +1,3 @@
-const NATIVE_ENDIAN = @import("builtin").target.cpu.arch.endian();
 const std = @import("std");
 const core = @import("core.zig");
 const Value = core.value.Value;
@@ -6,57 +5,82 @@ const DBusWriter = core.value.DBusWriter;
 const Serializer = core.value.Serializer;
 const dbusAlignOf = core.value.dbusAlignOf;
 
-pub const MessageBuilder = struct {
+/// Helper to encode a set of values into a D-Bus message body.
+pub const BodyEncoder = struct {
     allocator: std.mem.Allocator,
-    body: std.ArrayList(u8),
-    signature: std.ArrayList(u8),
+    body_list: std.ArrayList(u8),
+    signature_list: std.ArrayList(u8),
     endian: std.builtin.Endian,
 
-    pub fn init(allocator: std.mem.Allocator) !MessageBuilder {
-        return .{
+    /// Encodes a single value or a tuple of values into a new BodyEncoder.
+    pub fn encode(allocator: std.mem.Allocator, values: anytype) !BodyEncoder {
+        var self = BodyEncoder{
             .allocator = allocator,
-            .body = try std.ArrayList(u8).initCapacity(allocator, 256),
-            .signature = try std.ArrayList(u8).initCapacity(allocator, 32),
-            .endian = NATIVE_ENDIAN,
+            .body_list = try std.ArrayList(u8).initCapacity(allocator, 256),
+            .signature_list = try std.ArrayList(u8).initCapacity(allocator, 32),
+            .endian = .little,
         };
+        errdefer self.deinit();
+
+        const T = @TypeOf(values);
+        const type_info = @typeInfo(T);
+
+        if (type_info == .@"struct" and type_info.@"struct".is_tuple) {
+            inline for (values) |v| {
+                try self.appendValue(v);
+            }
+        } else {
+            try self.appendValue(values);
+        }
+
+        // Ensure signature is null-terminated
+        try self.signature_list.append(allocator, 0);
+
+        return self;
     }
 
-    pub fn deinit(self: *MessageBuilder) void {
-        self.body.deinit(self.allocator);
-        self.signature.deinit(self.allocator);
+    /// Releases resources used by the encoder.
+    pub fn deinit(self: *BodyEncoder) void {
+        self.body_list.deinit(self.allocator);
+        self.signature_list.deinit(self.allocator);
     }
 
-    pub fn append(self: *MessageBuilder, value: anytype) !void {
+    fn appendValue(self: *BodyEncoder, value: anytype) !void {
         const T = @TypeOf(value);
         const sig_len = Value.reprLength(T);
         var sig_buf: [256]u8 = undefined;
         Value.getRepr(T, sig_len, 0, sig_buf[0..sig_len]);
-        try self.signature.appendSlice(self.allocator, sig_buf[0..sig_len]);
+        try self.signature_list.appendSlice(self.allocator, sig_buf[0..sig_len]);
 
-        var writer = DBusWriter.init(&self.body, self.allocator, self.endian);
+        var writer = DBusWriter.init(&self.body_list, self.allocator, self.endian);
         try writer.padTo(dbusAlignOf(T));
         try Serializer.trySerialize(T, value, &writer);
     }
 
-    pub fn finish(self: *MessageBuilder) !struct { body: []const u8, signature: [:0]const u8 } {
-        // Ensure signature is null-terminated
-        try self.signature.append(self.allocator, 0);
-        return .{
-            .body = self.body.items,
-            .signature = self.signature.items[0 .. self.signature.items.len - 1 :0],
-        };
+    /// Returns the encoded body bytes.
+    pub fn body(self: BodyEncoder) []const u8 {
+        return self.body_list.items;
+    }
+
+    /// Returns the generated signature string.
+    pub fn signature(self: BodyEncoder) [:0]const u8 {
+        return self.signature_list.items[0 .. self.signature_list.items.len - 1 :0];
     }
 };
 
-pub const MessageReader = struct {
+/// Helper to decode values from a D-Bus message body according to its signature.
+pub const BodyDecoder = struct {
+    allocator: std.mem.Allocator,
     body: []const u8,
     signature: []const u8,
     pos: usize,
     sig_pos: usize,
     endian: std.builtin.Endian,
 
-    pub fn init(body: []const u8, signature: []const u8, endian: std.builtin.Endian) MessageReader {
+    /// Initializes a decoder with raw body and signature.
+    pub fn init(allocator: std.mem.Allocator, body: []const u8, signature: []const u8, endian: std.builtin.Endian) BodyDecoder {
         return .{
+            .allocator = allocator,
             .body = body,
             .signature = signature,
             .pos = 0,
@@ -65,7 +89,8 @@ pub const MessageReader = struct {
         };
     }
 
-    pub fn fromMessage(msg: core.Message) MessageReader {
+    /// Initializes a decoder from a Message, extracting the signature from header fields.
+    pub fn fromMessage(allocator: std.mem.Allocator, msg: core.Message) BodyDecoder {
         var sig: []const u8 = "";
         for (msg.header.header_fields) |field| {
             if (field.code == .Signature) {
@@ -75,6 +100,7 @@ pub const MessageReader = struct {
         }
 
         return .{
+            .allocator = allocator,
             .body = msg.body,
             .signature = sig,
             .pos = 0,
@@ -83,14 +109,16 @@ pub const MessageReader = struct {
         };
     }
 
-    fn alignTo(self: *MessageReader, alignment: usize) void {
+    fn alignTo(self: *BodyDecoder, alignment: usize) void {
         const rem = self.pos % alignment;
         if (rem != 0) {
             self.pos += (alignment - rem);
         }
     }
 
-    pub fn read(self: *MessageReader, comptime T: type) !T {
+    /// Decodes the next value of type T from the body.
+    /// Returns error.SignatureMismatch if the body signature doesn't match T's D-Bus representation.
+    pub fn decode(self: *BodyDecoder, comptime T: type) anyerror!T {
         const sig_len = Value.reprLength(T);
         var expected_sig: [256]u8 = undefined;
         Value.getRepr(T, sig_len, 0, expected_sig[0..sig_len]);
@@ -106,7 +134,7 @@ pub const MessageReader = struct {
         return self.readVal(T);
     }
 
-    fn readVal(self: *MessageReader, comptime T: type) !T {
+    fn readVal(self: *BodyDecoder, comptime T: type) anyerror!T {
         switch (@typeInfo(T)) {
             .int => |info| {
                 const size = info.bits / 8;
@@ -128,10 +156,9 @@ pub const MessageReader = struct {
                 self.pos += 8;
                 return @bitCast(val_bits);
             },
-            .@"struct" => {
+            .@"struct" => |info| {
                 if (T == core.value.GStr or T == core.value.GPath or T == core.value.GSig) {
                     // String reading: u32 len, bytes, null
-                    // Alignment 4 for length
                     if (self.pos + 4 > self.body.len) return error.EndOfBody;
                     const len = std.mem.readInt(u32, self.body[self.pos..][0..4], self.endian);
                     self.pos += 4;
@@ -145,7 +172,37 @@ pub const MessageReader = struct {
 
                     return T.new(s);
                 }
-                return error.UnsupportedType;
+
+                // Generic struct/tuple/dict-entry support
+                // DBus aligns structs and dict-entries to 8.
+                var result: T = undefined;
+                inline for (info.fields) |fld| {
+                    self.alignTo(dbusAlignOf(fld.type));
+                    @field(result, fld.name) = try self.readVal(fld.type);
+                }
+                return result;
+            },
+            .pointer => |info| {
+                if (info.size != .slice) return error.UnsupportedType;
+                const Elem = info.child;
+
+                // Read byte length (u32)
+                const byte_len = try self.readVal(u32);
+
+                // Align to element boundary
+                self.alignTo(dbusAlignOf(Elem));
+
+                const start_pos = self.pos;
+                if (self.pos + byte_len > self.body.len) return error.EndOfBody;
+
+                var list = try std.ArrayList(Elem).initCapacity(self.allocator, 0);
+                errdefer list.deinit(self.allocator);
+
+                while (self.pos - start_pos < byte_len) {
+                    self.alignTo(dbusAlignOf(Elem));
+                    try list.append(self.allocator, try self.readVal(Elem));
+                }
+                return try list.toOwnedSlice(self.allocator);
             },
             else => return error.UnsupportedType,
         }
