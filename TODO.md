@@ -1,1 +1,2 @@
-- [ ] Marshalling send fields
+- [x] Marshalling send fields
+- [ ] Making a great interface api

@@ -209,7 +209,7 @@ pub const MessageFlag = enum(u8) {
 pub const MessageHeader = struct {
     /// Endianness flag; ASCII 'l' for little-endian or ASCII 'B' for big-endian.
     /// Both header and body are in this endianness.
-    /// By default this library default to little-endian
+    /// By default this library default to the native endian.
     endianess: Endian = NATIVE_ENDIAN,
     /// Message type. Unknown types must be ignored
     message_type: MessageType,

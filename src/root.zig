@@ -3,6 +3,7 @@ const net = std.net;
 const rand = std.crypto.random;
 
 pub const core = @import("core.zig");
+pub const message = @import("message_utils.zig");
 
 const Value = core.value.Value;
 const DBusWriter = core.value.DBusWriter;
@@ -69,7 +70,7 @@ pub const Connection = struct {
         try io_writer.flush();
 
         const response = try io_reader.takeDelimiterInclusive('\n');
-        std.debug.print("RESPONSE = {s}\n", .{response});
+        std.debug.print("[goose] handshake :: RESPONSE = {s}", .{response});
         if (!std.mem.startsWith(u8, response, "OK")) {
             return error.HandshakeFail;
         }
@@ -84,14 +85,14 @@ pub const Connection = struct {
 
         const socket_path = try extractUnixSocketPath(bus_address);
         const socket = try net.connectUnixSocket(socket_path);
-        std.log.debug("Connected to D-Bus at: {s}", .{socket_path});
+        std.debug.print("[goose] debug :: Connected to D-Bus at: {s}\n", .{socket_path});
 
         try auth(socket);
 
         var conn = Connection{
             .__inner_sock = socket,
             .__allocator = allocator,
-            .pending_messages = try std.ArrayList(core.Message).initCapacity(allocator, 0),
+            .pending_messages = try std.ArrayList(core.Message).initCapacity(allocator, 10),
         };
 
         try conn.sayHello();
@@ -120,13 +121,12 @@ pub const Connection = struct {
 
         const body = std.ArrayList(u8).empty;
 
-        const message = core.Message.new(header, body.items);
-        var bytes = try message.pack(self.__allocator);
-        std.debug.print("{any}\n", .{header.header_fields});
+        const msg = core.Message.new(header, body.items);
+        var bytes = try msg.pack(self.__allocator);
+
         defer bytes.deinit(self.__allocator);
         var response = try self.call(bytes.items, serial);
         defer self.freeMessage(&response);
-        std.debug.print("Hello Response: {any}\n", .{response.header});
     }
 
     /// This function closes the underlined socket
@@ -180,13 +180,12 @@ pub const Connection = struct {
             }),
         };
 
-        const message = core.Message.new(header, body_arr.items);
-        var bytes = try message.pack(self.__allocator);
-        std.debug.print("{any}\n", .{header.header_fields});
+        const msg = core.Message.new(header, body_arr.items);
+        var bytes = try msg.pack(self.__allocator);
+
         defer bytes.deinit(self.__allocator);
         var response = try self.call(bytes.items, serial);
         defer self.freeMessage(&response);
-        std.debug.print("RequestName Response: {any}\n", .{response.header});
     }
 
     pub fn methodCall(
@@ -222,8 +221,8 @@ pub const Connection = struct {
             .header_fields = fields_list.items,
         };
 
-        const message = core.Message.new(header, body);
-        var bytes = try message.pack(self.__allocator);
+        const msg = core.Message.new(header, body);
+        var bytes = try msg.pack(self.__allocator);
         defer bytes.deinit(self.__allocator);
 
         return self.call(bytes.items, serial);
@@ -419,8 +418,6 @@ pub const Connection = struct {
 
         try io_writer.writeAll(data);
         try io_writer.flush();
-
-        std.debug.print("[:{d}:SEND] -> {d} bytes\n", .{ serial, data.len });
 
         while (true) {
             // Check pending messages first

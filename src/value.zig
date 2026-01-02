@@ -68,7 +68,7 @@ pub fn dbusAlignOf(comptime T: type) usize {
     };
 }
 
-// String wrapper
+/// String wrapper
 pub const GStr = struct {
     s: [:0]const u8,
     pub fn new(s: [:0]const u8) @This() {
@@ -76,7 +76,7 @@ pub const GStr = struct {
     }
 };
 
-// ObjectPath wrapper
+/// ObjectPath wrapper
 pub const GPath = struct {
     s: [:0]const u8,
     pub fn new(s: [:0]const u8) @This() {
@@ -84,7 +84,7 @@ pub const GPath = struct {
     }
 };
 
-// Signature wrapper
+/// Signature wrapper
 pub const GSig = struct {
     s: [:0]const u8,
     pub fn new(s: [:0]const u8) @This() {
@@ -92,7 +92,7 @@ pub const GSig = struct {
     }
 };
 
-// Unix fd wrapper
+/// Unix fd wrapper
 pub const GUFd = struct {
     fd: u32,
     pub fn new(fd: u32) @This() {
@@ -112,7 +112,7 @@ pub const Value = struct {
         return false;
     }
 
-    fn reprLength(comptime T: type) comptime_int {
+    pub fn reprLength(comptime T: type) comptime_int {
         var len = 0;
         if (T == GStr or T == GPath or T == GSig or T == GUFd) return 1;
         switch (@typeInfo(T)) {
@@ -152,7 +152,7 @@ pub const Value = struct {
         return len;
     }
 
-    fn getRepr(comptime T: type, len: comptime_int, start: comptime_int, xs: *[len]u8) void {
+    pub fn getRepr(comptime T: type, len: comptime_int, start: comptime_int, xs: *[len]u8) void {
         var real_start: usize = start;
 
         if (T == GStr) {
@@ -181,7 +181,7 @@ pub const Value = struct {
                     8 => {
                         xs[real_start] = switch (info.signedness) {
                             .unsigned => 'y',
-                            else => @compileError("i8 is not part of the D-Bus data specification"),
+                            else => @compileError("signed 8 bit integer (i8) is not part of the D-Bus data specification"),
                         };
                     },
                     16 => {
@@ -244,7 +244,7 @@ pub const Value = struct {
 
     /// Array
     pub fn Array(comptime T: type) type {
-        // NOTE: using [1]T instead of []T because []T is a pointer
+        // NOTE: using [1]T instead of []T because []T is considered to be a pointer value
         const repr_len = reprLength([1]T);
         var repr_arr = [_]u8{0} ** (repr_len);
         getRepr([1]T, repr_len, 1, &repr_arr);
@@ -289,7 +289,7 @@ pub const Value = struct {
                 w.writeU32At(len_pos, @intCast(arr_bytes));
             }
 
-            fn alignUp(value: usize, alignment: usize) usize {
+            inline fn alignUp(value: usize, alignment: usize) usize {
                 return (value + alignment - 1) & ~(alignment - 1);
             }
         };
