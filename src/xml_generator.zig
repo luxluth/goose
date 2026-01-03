@@ -70,15 +70,23 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
     inline for (std.meta.fields(T)) |field| {
         const FieldType = field.type;
         const type_info = @typeInfo(FieldType);
-        const is_signal = (type_info == .@"struct" and @hasDecl(FieldType, "__is_goose_signal"));
-        const is_conn = (std.mem.eql(u8, field.name, "conn"));
-        const is_unsupported_pointer = (type_info == .pointer and type_info.pointer.size != .slice);
 
-        if (!is_signal and !is_conn and !is_unsupported_pointer) {
-            const sig = try getSignature(allocator, FieldType);
-            defer allocator.free(sig);
-            try w.print("    <property name=\"{s}\" type=\"{s}\" access=\"read\"/>\n", .{ field.name, sig });
-        }
+        // Skip signals and connection
+        if (type_info == .@"struct" and @hasDecl(FieldType, "__is_goose_signal")) continue;
+        if (comptime std.mem.eql(u8, field.name, "conn")) continue;
+        if (type_info == .pointer and type_info.pointer.size != .slice) continue; // Skip unsupported pointers
+
+        const is_wrapped = type_info == .@"struct" and @hasDecl(FieldType, "__is_goose_property");
+        const access: []const u8 = if (is_wrapped) switch (FieldType.AccessMode) {
+            .Read => "read",
+            .Write => "write",
+            .ReadWrite => "readwrite",
+        } else "read";
+        const DataType = if (is_wrapped) FieldType.DataType else FieldType;
+
+        const sig = try getSignature(allocator, DataType);
+        defer allocator.free(sig);
+        try w.print("    <property name=\"{s}\" type=\"{s}\" access=\"{s}\"/>\n", .{ field.name, sig, access });
     }
 
     try w.writeAll("  </interface>\n");

@@ -7,7 +7,7 @@ const GStr = goose.core.value.GStr;
 const MyInterface = struct {
     conn: *Connection,
     // Properties (not yet supported in dispatch logic, but struct field is fine)
-    ThisIsAProps: i32 = 43,
+    ThisIsAProps: goose.Property(i32, .ReadWrite) = goose.property(i32, .ReadWrite, 43),
     // Signal
     thisIsAsignal: goose.Signal(GStr) = signal("thisIsAsignal", GStr),
 

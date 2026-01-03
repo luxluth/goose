@@ -47,6 +47,7 @@ pub const BodyEncoder = struct {
 
     fn appendValue(self: *BodyEncoder, value: anytype) !void {
         const T = @TypeOf(value);
+        if (T == void) return;
         const sig_len = Value.reprLength(T);
         var sig_buf: [256]u8 = undefined;
         Value.getRepr(T, sig_len, 0, sig_buf[0..sig_len]);

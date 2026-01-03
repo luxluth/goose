@@ -258,11 +258,12 @@ pub const MessageHeader = struct {
         try U32.new(self.body_length).ser(&w);
         try U32.new(self.serial).ser(&w);
 
-        try w.padTo(4);
+        // 4) Array of header fields
+        // Array length is u32 (4-aligned). Header is currently 12 bytes.
+        // 12 % 4 == 0, so no padding needed for the length itself.
         const len_pos = buf.items.len;
         try buf.appendNTimes(allocator, 0, 4);
 
-        try w.padTo(8);
         const start_elems = buf.items.len;
         // Each element: 8-aligned struct:
         //   field[0]: BYTE code (1-aligned)

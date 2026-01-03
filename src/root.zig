@@ -65,6 +65,23 @@ pub fn signal(name: [:0]const u8, comptime T: type) Signal(T) {
     return .{ .name = name };
 }
 
+pub const Access = enum { Read, Write, ReadWrite };
+
+/// Property definition helper.
+pub fn Property(comptime T: type, comptime access_mode: Access) type {
+    return struct {
+        value: T,
+        pub const __is_goose_property = true;
+        pub const DataType = T;
+        pub const AccessMode = access_mode;
+    };
+}
+
+/// Creates a new property with initial value and access.
+pub fn property(comptime T: type, comptime access: Access, value: T) Property(T, access) {
+    return .{ .value = value };
+}
+
 const DBusReader = struct {
     pos: usize = 0,
     reader: *std.Io.Reader,
@@ -326,7 +343,6 @@ pub const Connection = struct {
                 fn dispatch(w: *const InterfaceWrapper, conn: *Connection, msg: core.Message) anyerror!void {
                     const self_obj = @as(*T, @ptrCast(@alignCast(w.instance)));
 
-                    // Find member
                     var member_name: ?[]const u8 = null;
                     var iface_name: ?[]const u8 = null;
                     for (msg.header.header_fields) |f| {
@@ -338,34 +354,185 @@ pub const Connection = struct {
                     }
                     const member = member_name orelse return;
 
+                    // PropUnion Generation
+                    const PropUnion = blk: {
+                        comptime var fields: []const std.builtin.Type.UnionField = &.{};
+                        comptime var enum_fields: []const std.builtin.Type.EnumField = &.{};
+                        comptime var count: usize = 0;
+
+                        const struct_info = @typeInfo(T).@"struct";
+                        inline for (struct_info.fields) |f| {
+                            const FType = f.type;
+                            const type_info = @typeInfo(FType);
+                            const DataType = if (type_info == .@"struct" and @hasDecl(FType, "__is_goose_property")) FType.DataType else FType;
+                            const is_prop = if (type_info == .@"struct" and @hasDecl(FType, "__is_goose_property")) true else pblk: {
+                                const is_signal = (type_info == .@"struct" and @hasDecl(FType, "__is_goose_signal"));
+                                const is_conn = std.mem.eql(u8, f.name, "conn");
+                                const is_ptr = (type_info == .pointer and type_info.pointer.size != .slice);
+                                break :pblk !is_signal and !is_conn and !is_ptr;
+                            };
+
+                            if (is_prop) {
+                                fields = fields ++ &[_]std.builtin.Type.UnionField{.{ .name = f.name, .type = DataType, .alignment = @alignOf(DataType) }};
+                                enum_fields = enum_fields ++ &[_]std.builtin.Type.EnumField{.{ .name = f.name, .value = count }};
+                                count += 1;
+                            }
+                        }
+
+                        if (count == 0) break :blk union { _dummy: void };
+
+                        const TagType = @Type(.{ .@"enum" = .{
+                            .tag_type = u16,
+                            .fields = enum_fields,
+                            .decls = &.{},
+                            .is_exhaustive = true,
+                        } });
+
+                        break :blk @Type(.{ .@"union" = .{
+                            .layout = .auto,
+                            .tag_type = TagType,
+                            .fields = fields,
+                            .decls = &.{},
+                        } });
+                    };
+
+                    if (iface_name != null and std.mem.eql(u8, iface_name.?, "org.freedesktop.DBus.Properties")) {
+                        if (std.mem.eql(u8, member, "GetAll")) {
+                            var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
+                            const requested_iface = try decoder.decode(GStr);
+                            if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
+                                const VariantType = Value.Variant(PropUnion);
+                                var dict = std.StringHashMap(VariantType).init(conn.__allocator);
+                                defer dict.deinit();
+
+                                const struct_info = @typeInfo(T).@"struct";
+                                inline for (struct_info.fields) |f| {
+                                    const FType = f.type;
+                                    const type_info = @typeInfo(FType);
+                                    const is_wrapped = type_info == .@"struct" and @hasDecl(FType, "__is_goose_property");
+                                    const is_prop = is_wrapped or blk: {
+                                        const is_signal = (type_info == .@"struct" and @hasDecl(FType, "__is_goose_signal"));
+                                        const is_conn = std.mem.eql(u8, f.name, "conn");
+                                        const is_ptr = (type_info == .pointer and type_info.pointer.size != .slice);
+                                        break :blk !is_signal and !is_conn and !is_ptr;
+                                    };
+                                    const readable = if (is_wrapped) FType.AccessMode != .Write else true;
+
+                                    if (is_prop and readable) {
+                                        const val_field = @field(self_obj, f.name);
+                                        const val = if (is_wrapped) val_field.value else val_field;
+                                        try dict.put(f.name, VariantType.new(@unionInit(PropUnion, f.name, val)));
+                                    }
+                                }
+
+                                var encoder = try message.BodyEncoder.encode(conn.__allocator, Value.Dict(GStr, VariantType, std.StringHashMap(VariantType)).new(dict));
+                                defer encoder.deinit();
+                                try conn.sendReply(msg, encoder);
+                            } else {
+                                const VariantType = Value.Variant(PropUnion);
+                                var dict = std.StringHashMap(VariantType).init(conn.__allocator);
+                                defer dict.deinit();
+                                var encoder = try message.BodyEncoder.encode(conn.__allocator, Value.Dict(GStr, VariantType, std.StringHashMap(VariantType)).new(dict));
+                                defer encoder.deinit();
+                                try conn.sendReply(msg, encoder);
+                            }
+                            return;
+                        } else if (std.mem.eql(u8, member, "Get")) {
+                            var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
+                            const requested_iface = try decoder.decode(GStr);
+                            const prop_name = try decoder.decode(GStr);
+
+                            if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
+                                const VariantType = Value.Variant(PropUnion);
+                                var found = false;
+                                var val_variant: VariantType = undefined;
+
+                                const struct_info = @typeInfo(T).@"struct";
+                                inline for (struct_info.fields) |f| {
+                                    if (!found and std.mem.eql(u8, f.name, prop_name.s)) {
+                                        const FType = f.type;
+                                        const type_info = @typeInfo(FType);
+                                        const is_wrapped = type_info == .@"struct" and @hasDecl(FType, "__is_goose_property");
+                                        const is_prop = is_wrapped or blk: {
+                                            const is_signal = (type_info == .@"struct" and @hasDecl(FType, "__is_goose_signal"));
+                                            const is_conn = std.mem.eql(u8, f.name, "conn");
+                                            const is_ptr = (type_info == .pointer and type_info.pointer.size != .slice);
+                                            break :blk !is_signal and !is_conn and !is_ptr;
+                                        };
+                                        const readable = if (is_wrapped) FType.AccessMode != .Write else true;
+
+                                        if (is_prop) {
+                                            if (readable) {
+                                                const val_field = @field(self_obj, f.name);
+                                                const val = if (is_wrapped) val_field.value else val_field;
+                                                val_variant = VariantType.new(@unionInit(PropUnion, f.name, val));
+                                                found = true;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (found) {
+                                    var encoder = try message.BodyEncoder.encode(conn.__allocator, val_variant);
+                                    defer encoder.deinit();
+                                    try conn.sendReply(msg, encoder);
+                                }
+                            }
+                            return;
+                        } else if (std.mem.eql(u8, member, "Set")) {
+                            var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
+                            const requested_iface = try decoder.decode(GStr);
+                            const prop_name = try decoder.decode(GStr);
+                            const val_union = try decoder.decode(PropUnion);
+
+                            if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
+                                var found = false;
+                                const struct_info = @typeInfo(T).@"struct";
+                                inline for (struct_info.fields) |f| {
+                                    if (!found and std.mem.eql(u8, f.name, prop_name.s)) {
+                                        const FType = f.type;
+                                        const type_info = @typeInfo(FType);
+                                        const is_wrapped = type_info == .@"struct" and @hasDecl(FType, "__is_goose_property");
+                                        const is_prop = is_wrapped or blk: {
+                                            const is_signal = (type_info == .@"struct" and @hasDecl(FType, "__is_goose_signal"));
+                                            const is_conn = std.mem.eql(u8, f.name, "conn");
+                                            const is_ptr = (type_info == .pointer and type_info.pointer.size != .slice);
+                                            break :blk !is_signal and !is_conn and !is_ptr;
+                                        };
+                                        const writable = if (is_wrapped) FType.AccessMode != .Read else false;
+
+                                        if (is_prop) {
+                                            if (writable) {
+                                                if (std.meta.activeTag(val_union) == std.meta.stringToEnum(std.meta.Tag(PropUnion), f.name)) {
+                                                    const new_val = @field(val_union, f.name);
+                                                    if (is_wrapped) {
+                                                        @field(self_obj, f.name).value = new_val;
+                                                    } else {
+                                                        @field(self_obj, f.name) = new_val;
+                                                    }
+                                                    found = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if (found) {
+                                    var encoder = try message.BodyEncoder.encode(conn.__allocator, .{}); // Void return;
+                                    defer encoder.deinit();
+                                    try conn.sendReply(msg, encoder);
+                                }
+                            }
+                            return;
+                        }
+                    }
+
                     // Handle Introspect
                     if (iface_name) |iface| {
                         if (std.mem.eql(u8, iface, "org.freedesktop.DBus.Introspectable") and std.mem.eql(u8, member, "Introspect")) {
                             // Return XML
                             var encoder = try message.BodyEncoder.encode(conn.__allocator, GStr.new(w.intro_xml));
                             defer encoder.deinit();
-
-                            var dest: ?[:0]const u8 = null;
-                            for (msg.header.header_fields) |f| if (f.code == .Sender) {
-                                dest = f.value.Sender;
-                            };
-
-                            var reply_fields = try std.ArrayList(core.HeaderField).initCapacity(conn.__allocator, 3);
-                            defer reply_fields.deinit(conn.__allocator);
-                            try reply_fields.append(conn.__allocator, .{ .code = .ReplySerial, .value = .{ .ReplySerial = msg.header.serial } });
-                            if (dest) |d| try reply_fields.append(conn.__allocator, .{ .code = .Destination, .value = .{ .Destination = d } });
-                            try reply_fields.append(conn.__allocator, .{ .code = .Signature, .value = .{ .Signature = encoder.signature() } });
-
-                            const reply_h = core.MessageHeader{
-                                .message_type = .MethodReturn,
-                                .flags = 0,
-                                .proto_version = 1,
-                                .body_length = @intCast(encoder.body().len),
-                                .serial = conn.serial_counter,
-                                .header_fields = reply_fields.items,
-                            };
-                            conn.serial_counter += 1;
-                            try conn.sendMessage(core.Message.new(reply_h, encoder.body()));
+                            try conn.sendReply(msg, encoder);
                             return;
                         }
                     }
@@ -383,28 +550,7 @@ pub const Connection = struct {
                                         const result = try @call(.auto, field_val, .{self_obj});
                                         var encoder = try message.BodyEncoder.encode(conn.__allocator, result);
                                         defer encoder.deinit();
-
-                                        var dest: ?[:0]const u8 = null;
-                                        for (msg.header.header_fields) |f| if (f.code == .Sender) {
-                                            dest = f.value.Sender;
-                                        };
-
-                                        var reply_fields = try std.ArrayList(core.HeaderField).initCapacity(conn.__allocator, 3);
-                                        defer reply_fields.deinit(conn.__allocator);
-                                        try reply_fields.append(conn.__allocator, .{ .code = .ReplySerial, .value = .{ .ReplySerial = msg.header.serial } });
-                                        if (dest) |d| try reply_fields.append(conn.__allocator, .{ .code = .Destination, .value = .{ .Destination = d } });
-                                        try reply_fields.append(conn.__allocator, .{ .code = .Signature, .value = .{ .Signature = encoder.signature() } });
-
-                                        const reply_h = core.MessageHeader{
-                                            .message_type = .MethodReturn,
-                                            .flags = 0,
-                                            .proto_version = 1,
-                                            .body_length = @intCast(encoder.body().len),
-                                            .serial = conn.serial_counter,
-                                            .header_fields = reply_fields.items,
-                                        };
-                                        conn.serial_counter += 1;
-                                        try conn.sendMessage(core.Message.new(reply_h, encoder.body()));
+                                        try conn.sendReply(msg, encoder);
                                         return;
                                     }
                                 }
@@ -417,6 +563,38 @@ pub const Connection = struct {
 
         try self.registered_interfaces.append(self.__allocator, wrapper);
         return self.registered_interfaces.items.len - 1;
+    }
+
+    pub fn sendReply(self: *Connection, m: core.Message, enc: message.BodyEncoder) !void {
+        var reply_fields = try std.ArrayList(core.HeaderField).initCapacity(self.__allocator, 3);
+        defer {
+            for (reply_fields.items) |f| {
+                switch (f.value) {
+                    .Destination, .Signature => |s| self.__allocator.free(s),
+                    else => {},
+                }
+            }
+            reply_fields.deinit(self.__allocator);
+        }
+        try reply_fields.append(self.__allocator, .{ .code = .ReplySerial, .value = .{ .ReplySerial = m.header.serial } });
+
+        var dst: ?[:0]const u8 = null;
+        for (m.header.header_fields) |f| if (f.code == .Sender) {
+            dst = f.value.Sender;
+        };
+        if (dst) |d| try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeZ(u8, d) } });
+        try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = try self.__allocator.dupeZ(u8, enc.signature()) } });
+
+        const reply_h = core.MessageHeader{
+            .message_type = .MethodReturn,
+            .flags = 0,
+            .proto_version = 1,
+            .body_length = @intCast(enc.body().len),
+            .serial = self.serial_counter,
+            .header_fields = reply_fields.items,
+        };
+        self.serial_counter += 1;
+        try self.sendMessage(core.Message.new(reply_h, enc.body()));
     }
 
     pub fn waitOnHandle(self: *Connection, handle: usize) !void {
@@ -439,19 +617,22 @@ pub const Connection = struct {
 
                 if (path) |p| {
                     var handled = false;
-                    for (self.registered_interfaces.items) |*wrapper| {
+                    for (self.registered_interfaces.items) |*w| {
                         // Check path first
-                        if (std.mem.eql(u8, wrapper.path, p)) {
+                        if (std.mem.eql(u8, w.path, p)) {
                             // Then check interface or Introspectable
                             if (iface) |i| {
-                                if (std.mem.eql(u8, wrapper.interface_name, i) or std.mem.eql(u8, i, "org.freedesktop.DBus.Introspectable")) {
+                                if (std.mem.eql(u8, w.interface_name, i) or
+                                    std.mem.eql(u8, i, "org.freedesktop.DBus.Introspectable") or
+                                    std.mem.eql(u8, i, "org.freedesktop.DBus.Properties"))
+                                {
                                     // Dispatch
-                                    try wrapper.dispatch(wrapper, self, msg);
+                                    try w.dispatch(w, self, msg);
                                     handled = true;
                                 }
                             } else {
                                 // Fallback dispatch
-                                try wrapper.dispatch(wrapper, self, msg);
+                                try w.dispatch(w, self, msg);
                                 handled = true;
                             }
                         }
@@ -469,14 +650,14 @@ pub const Connection = struct {
                                 var seen_children = std.StringHashMap(void).init(self.__allocator);
                                 defer seen_children.deinit();
 
-                                for (self.registered_interfaces.items) |*wrapper| {
-                                    if (std.mem.startsWith(u8, wrapper.path, p)) {
-                                        if (wrapper.path.len > p.len) {
+                                for (self.registered_interfaces.items) |*w| {
+                                    if (std.mem.startsWith(u8, w.path, p)) {
+                                        if (w.path.len > p.len) {
                                             var child_name: []const u8 = "";
                                             if (std.mem.eql(u8, p, "/")) {
                                                 // Special case root
-                                                if (wrapper.path.len > 1) {
-                                                    const sub = wrapper.path[1..];
+                                                if (w.path.len > 1) {
+                                                    const sub = w.path[1..];
                                                     if (std.mem.indexOfScalar(u8, sub, '/')) |idx| {
                                                         child_name = sub[0..idx];
                                                     } else {
@@ -484,9 +665,9 @@ pub const Connection = struct {
                                                     }
                                                 }
                                             } else {
-                                                // Check if wrapper.path[p.len] == '/'
-                                                if (wrapper.path[p.len] == '/') {
-                                                    const sub = wrapper.path[p.len + 1 ..];
+                                                // Check if w.path[p.len] == '/'
+                                                if (w.path[p.len] == '/') {
+                                                    const sub = w.path[p.len + 1 ..];
                                                     if (std.mem.indexOfScalar(u8, sub, '/')) |idx| {
                                                         child_name = sub[0..idx];
                                                     } else {
@@ -496,7 +677,7 @@ pub const Connection = struct {
                                             }
 
                                             if (child_name.len > 0) {
-                                                if (!seen_children.contains(child_name)) {
+                                                if (seen_children.get(child_name) == null) {
                                                     try seen_children.put(child_name, {});
                                                     try children_xml.writer(self.__allocator).print("  <node name=\"{s}\"/>\n", .{child_name});
                                                 }
@@ -505,46 +686,23 @@ pub const Connection = struct {
                                     }
                                 }
 
-                                if (children_xml.items.len > 0) {
-                                    // Construct full XML
-                                    var full_xml = try std.ArrayList(u8).initCapacity(self.__allocator, 1024);
-                                    defer full_xml.deinit(self.__allocator);
-                                    const w = full_xml.writer(self.__allocator);
-                                    try w.writeAll("<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"");
-                                    try w.writeAll(" \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n");
-                                    try w.writeAll("<node>\n");
-                                    try w.writeAll(children_xml.items);
-                                    try w.writeAll("</node>\n");
+                                // Construct full XML
+                                var full_xml = try std.ArrayList(u8).initCapacity(self.__allocator, 1024);
+                                defer full_xml.deinit(self.__allocator);
+                                const xw = full_xml.writer(self.__allocator);
+                                try xw.writeAll("<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"");
+                                try xw.writeAll(" \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n");
+                                try xw.writeAll("<node>\n");
+                                try xw.writeAll(children_xml.items);
+                                try xw.writeAll("</node>\n");
 
-                                    // Send Reply
-                                    const xml_slice = try full_xml.toOwnedSliceSentinel(self.__allocator, 0);
-                                    defer self.__allocator.free(xml_slice);
+                                // Send Reply
+                                const xml_slice = try full_xml.toOwnedSliceSentinel(self.__allocator, 0);
+                                defer self.__allocator.free(xml_slice);
 
-                                    var encoder = try message.BodyEncoder.encode(self.__allocator, GStr.new(xml_slice));
-                                    defer encoder.deinit();
-
-                                    var reply_fields = try std.ArrayList(core.HeaderField).initCapacity(self.__allocator, 3);
-                                    defer reply_fields.deinit(self.__allocator);
-                                    try reply_fields.append(self.__allocator, .{ .code = .ReplySerial, .value = .{ .ReplySerial = msg.header.serial } });
-
-                                    var dest: ?[:0]const u8 = null;
-                                    for (msg.header.header_fields) |f| if (f.code == .Sender) {
-                                        dest = f.value.Sender;
-                                    };
-                                    if (dest) |d| try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = d } });
-                                    try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = encoder.signature() } });
-
-                                    const reply_h = core.MessageHeader{
-                                        .message_type = .MethodReturn,
-                                        .flags = 0,
-                                        .proto_version = 1,
-                                        .body_length = @intCast(encoder.body().len),
-                                        .serial = self.serial_counter,
-                                        .header_fields = reply_fields.items,
-                                    };
-                                    self.serial_counter += 1;
-                                    try self.sendMessage(core.Message.new(reply_h, encoder.body()));
-                                }
+                                var encoder = try message.BodyEncoder.encode(self.__allocator, GStr.new(xml_slice));
+                                defer encoder.deinit();
+                                try self.sendReply(msg, encoder);
                             }
                         }
                     }
@@ -662,7 +820,12 @@ pub const Connection = struct {
 
     fn readNextMessage(self: *Connection) !core.Message {
         var header_buf: [16]u8 = undefined;
-        try readExact(self.__inner_sock, &header_buf);
+        var reader_buf: [4096 * 10]u8 = undefined;
+
+        var stream_reader = self.__inner_sock.reader(&reader_buf);
+        const reader: *std.Io.Reader = stream_reader.interface();
+
+        try reader.readSliceAll(&header_buf);
 
         const endian: std.builtin.Endian = switch (header_buf[0]) {
             'l' => .little,
@@ -678,20 +841,19 @@ pub const Connection = struct {
 
         const fields_bytes = try self.__allocator.alloc(u8, fields_len);
         defer self.__allocator.free(fields_bytes);
-        try readExact(self.__inner_sock, fields_bytes);
+        try reader.readSliceAll(fields_bytes);
 
         // Align stream to 8 bytes
         const current_pos = 16 + fields_len;
         const padding = (8 - (current_pos % 8)) % 8;
         if (padding > 0) {
-            var pad_buf: [8]u8 = undefined;
-            try readExact(self.__inner_sock, pad_buf[0..padding]);
+            reader.seek += padding;
         }
 
         // Read body
         const body = try self.__allocator.alloc(u8, body_len);
         errdefer self.__allocator.free(body);
-        try readExact(self.__inner_sock, body);
+        try reader.readSliceAll(body);
 
         // Parse fields
         var fields_list = try std.ArrayList(core.HeaderField).initCapacity(self.__allocator, 4);
@@ -705,65 +867,64 @@ pub const Connection = struct {
             fields_list.deinit(self.__allocator);
         }
 
-        var fstream = std.io.fixedBufferStream(fields_bytes);
-        var freader = fstream.reader();
+        var freader = std.io.Reader.fixed(fields_bytes);
         var fpos: usize = 0;
 
         while (fpos < fields_len) {
             const padding_f = (8 - (fpos % 8)) % 8;
             if (padding_f > 0) {
-                try freader.skipBytes(padding_f, .{});
+                freader.seek += padding_f;
                 fpos += padding_f;
             }
             if (fpos >= fields_len) break;
 
-            const code_u8 = try freader.readByte();
+            const code_u8 = try freader.takeByte();
             fpos += 1;
             const code: core.HeaderFieldCode = if (code_u8 <= 9) @enumFromInt(code_u8) else .Invalid;
 
             // Variant signature (we assume standard fields have correct types)
-            const sig_len = try freader.readByte();
+            const sig_len = try freader.takeByte();
             fpos += 1;
-            try freader.skipBytes(sig_len + 1, .{}); // sig + null
+            freader.seek += sig_len + 1; // sig + null
             fpos += sig_len + 1;
 
             switch (code) {
                 .ReplySerial => {
                     const pad4 = (4 - (fpos % 4)) % 4;
-                    try freader.skipBytes(pad4, .{});
+                    freader.seek += pad4;
                     fpos += pad4;
-                    const val = try freader.readInt(u32, endian);
-                    fpos += 4;
+                    const val = try freader.takeInt(u32, endian);
+                    fpos += @sizeOf(u32);
                     try fields_list.append(self.__allocator, .{ .code = .ReplySerial, .value = .{ .ReplySerial = val } });
                 },
                 .UnixFds => {
                     const pad4 = (4 - (fpos % 4)) % 4;
-                    try freader.skipBytes(pad4, .{});
+                    freader.seek += pad4;
                     fpos += pad4;
-                    const val = try freader.readInt(u32, endian);
+                    const val = try freader.takeInt(u32, endian);
                     fpos += 4;
                     try fields_list.append(self.__allocator, .{ .code = .UnixFds, .value = .{ .UnixFds = val } });
                 },
                 .Signature => {
-                    const s_len = try freader.readByte();
+                    const s_len = try freader.takeByte();
                     fpos += 1;
                     const s_owned = try self.__allocator.allocSentinel(u8, s_len, 0);
-                    try freader.readNoEof(s_owned);
+                    try freader.readSliceAll(s_owned);
                     fpos += s_len;
-                    try freader.skipBytes(1, .{}); // null
+                    freader.seek += 1; // null
                     fpos += 1;
                     try fields_list.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = s_owned } });
                 },
                 .Path, .Interface, .Member, .ErrorName, .Destination, .Sender => |c| {
                     const pad4 = (4 - (fpos % 4)) % 4;
-                    try freader.skipBytes(pad4, .{});
+                    freader.seek += pad4;
                     fpos += pad4;
-                    const s_len = try freader.readInt(u32, endian);
+                    const s_len = try freader.takeInt(u32, endian);
                     fpos += 4;
                     const s_owned = try self.__allocator.allocSentinel(u8, s_len, 0);
-                    try freader.readNoEof(s_owned);
+                    try freader.readSliceAll(s_owned);
                     fpos += s_len;
-                    try freader.skipBytes(1, .{}); // null
+                    freader.seek += 1;
                     fpos += 1;
 
                     const hfv: core.HeaderFieldValue = switch (c) {
@@ -799,24 +960,6 @@ pub const Connection = struct {
             },
             .body = body,
         };
-    }
-
-    fn readExact(stream: net.Stream, buf: []u8) !void {
-        var got: usize = 0;
-        while (got < buf.len) {
-            const n = try stream.read(buf[got..]);
-            if (n == 0) return error.UnexpectedEof;
-            got += n;
-        }
-    }
-
-    fn readPadding(r: *std.Io.Reader, current_offset: *usize, @"align": usize) !void {
-        const rem = current_offset.* % @"align";
-        if (rem == 0) return;
-        var tmp: [8]u8 = undefined;
-        const need = @"align" - rem;
-        try readExact(r, tmp[0..need]);
-        current_offset.* += need;
     }
 
     fn printData(data: []u8) void {

@@ -114,55 +114,52 @@ pub const Value = struct {
     }
 
     pub fn reprLength(comptime T: type) comptime_int {
-        var len = 0;
-        if (T == GStr or T == GPath or T == GSig or T == GUFd) return 1;
-        switch (@typeInfo(T)) {
-            .int => |_| {
-                len = 1;
-            },
-            .bool => {
-                len = 1;
-            },
-            .float => |info| {
-                if (info.bits != 64) {
-                    @compileError("Only f64 are legible for the D-Bus data specification");
-                }
-                len = 1;
-            },
-            .@"struct" => |info| {
-                inline for (info.fields) |field| {
-                    len += reprLength(field.type);
-                }
-
-                const is_dict_entry = info.fields.len == 2 and (std.mem.eql(u8, info.fields[0].name, "key") and std.mem.eql(u8, info.fields[1].name, "value"));
-                if (is_dict_entry) {
-                    len += 2;
-                } else if (!info.is_tuple) {
-                    len += 2;
+        if (T == void) return 0;
+        const info = @typeInfo(T);
+        switch (info) {
+            .@"struct", .@"union", .@"enum", .@"opaque" => {
+                if (@hasDecl(T, "SIGNATURE")) {
+                    return @field(T, "SIGNATURE").len;
                 }
             },
-            .@"union" => |_| {
-                len = 1;
-            },
-            .array => |info| {
-                len += 1 + reprLength(info.child);
-            },
-            .pointer => |info| {
-                if (info.size == .slice) {
-                    len += 1 + reprLength(info.child);
-                } else {
-                    @compileError("Single pointers are not supported in D-Bus signatures: " ++ @typeName(T));
-                }
-            },
-            else => {
-                @compileLog(@typeInfo(T));
-                @compileError("connot get the signature length of this type");
-            },
+            else => {},
         }
-        return len;
+        if (T == GStr or T == GPath or T == GSig or T == GUFd) return 1;
+        switch (info) {
+            .int => return 1,
+            .bool => return 1,
+            .float => |f_info| {
+                if (f_info.bits != 64) @compileError("Only f64 supported");
+                return 1;
+            },
+            .@"struct" => |s_info| {
+                const is_dict_entry = s_info.fields.len == 2 and (std.mem.eql(u8, s_info.fields[0].name, "key") and std.mem.eql(u8, s_info.fields[1].name, "value"));
+                var len: usize = if (is_dict_entry or !s_info.is_tuple) 2 else 0;
+                inline for (s_info.fields) |field| len += reprLength(field.type);
+                return len;
+            },
+            .@"union" => return 1,
+            .array => |a_info| return 1 + reprLength(a_info.child),
+            .pointer => |p_info| {
+                if (p_info.size == .slice) return 1 + reprLength(p_info.child);
+                @compileError("Unsupported pointer type");
+            },
+            else => @compileError("Unsupported type for signature"),
+        }
     }
 
     pub fn getRepr(comptime T: type, len: comptime_int, start: comptime_int, xs: *[len]u8) void {
+        const info = @typeInfo(T);
+        switch (info) {
+            .@"struct", .@"union", .@"enum", .@"opaque" => {
+                if (@hasDecl(T, "SIGNATURE")) {
+                    const S = @field(T, "SIGNATURE");
+                    @memcpy(xs[start..][0..S.len], S);
+                    return;
+                }
+            },
+            else => {},
+        }
         var real_start: usize = start;
 
         if (T == GStr) {
@@ -179,94 +176,65 @@ pub const Value = struct {
             return;
         }
 
-        switch (@typeInfo(T)) {
-            .comptime_int => {
-                @compileError("unable to evaluate the size of a comptime_int");
+        switch (info) {
+            .int => |i_info| {
+                xs[real_start] = switch (i_info.bits) {
+                    8 => 'y',
+                    16 => if (i_info.signedness == .signed) 'n' else 'q',
+                    32 => if (i_info.signedness == .signed) 'i' else 'u',
+                    64 => if (i_info.signedness == .signed) 'x' else 't',
+                    else => @compileError("Unsupported int"),
+                };
             },
-            .int => |info| {
-                switch (info.bits) {
-                    1 => {
-                        @compileError("if you want to create a boolean value, use a bool instead of i1");
-                    },
-                    8 => {
-                        xs[real_start] = switch (info.signedness) {
-                            .unsigned => 'y',
-                            else => @compileError("signed 8 bit integer (i8) is not part of the D-Bus data specification"),
-                        };
-                    },
-                    16 => {
-                        xs[real_start] = switch (info.signedness) {
-                            .unsigned => 'q',
-                            .signed => 'n',
-                        };
-                    },
-                    32 => {
-                        xs[real_start] = switch (info.signedness) {
-                            .unsigned => 'u',
-                            .signed => 'i',
-                        };
-                    },
-                    64 => {
-                        xs[real_start] = switch (info.signedness) {
-                            .unsigned => 't',
-                            .signed => 'x',
-                        };
-                    },
-                    else => {
-                        @compileError("unsupported data type by the D-Bus specification");
-                    },
-                }
-            },
-            .float => {
-                xs[real_start] = 'd';
-            },
-            .bool => {
-                xs[real_start] = 'b';
-            },
-            .@"struct" => |info| {
-                const is_dict_entry = info.fields.len == 2 and (std.mem.eql(u8, info.fields[0].name, "key") and std.mem.eql(u8, info.fields[1].name, "value"));
+            .float => xs[real_start] = 'd',
+            .bool => xs[real_start] = 'b',
+            .@"struct" => |s_info| {
+                const is_dict_entry = s_info.fields.len == 2 and (std.mem.eql(u8, s_info.fields[0].name, "key") and std.mem.eql(u8, s_info.fields[1].name, "value"));
                 if (is_dict_entry) {
                     xs[real_start] = '{';
                     real_start += 1;
                     xs[len - 1] = '}';
-                } else if (!info.is_tuple) {
+                } else if (!s_info.is_tuple) {
                     xs[real_start] = '(';
                     real_start += 1;
                     xs[len - 1] = ')';
                 }
-                inline for (info.fields) |field| {
+                inline for (s_info.fields) |field| {
                     const ll = reprLength(field.type);
-                    getRepr(field.type, ll, 0, xs[real_start..][0..ll]);
+                    getRepr(field.type, ll, 0, @as(*[ll]u8, @ptrCast(xs[real_start..][0..ll])));
                     real_start += ll;
                 }
             },
-            .array => |info| {
-                xs[0] = 'a';
-                getRepr(info.child, (xs.len - 1), 0, xs[1..]);
+            .array => |a_info| {
+                xs[real_start] = 'a';
+                const ll = reprLength(a_info.child);
+                getRepr(a_info.child, ll, 0, @as(*[ll]u8, @ptrCast(xs[real_start + 1 ..][0..ll])));
             },
-            .pointer => |info| {
-                xs[0] = 'a';
-                getRepr(info.child, (xs.len - 1), 0, xs[1..]);
+            .pointer => |p_info| {
+                xs[real_start] = 'a';
+                const ll = reprLength(p_info.child);
+                getRepr(p_info.child, ll, 0, @as(*[ll]u8, @ptrCast(xs[real_start + 1 ..][0..ll])));
             },
-            .@"union" => |_| {
-                xs[real_start] = 'v';
-            },
-            else => {
-                @compileError("unable to create a signature for this type");
-            },
+            .@"union" => xs[real_start] = 'v',
+            else => unreachable,
         }
     }
 
     /// Array
     pub fn Array(comptime T: type) type {
         // NOTE: using [1]T instead of []T because []T is considered to be a pointer value
-        const repr_len = reprLength([1]T);
-        var repr_arr = [_]u8{0} ** (repr_len);
-        getRepr([1]T, repr_len, 1, &repr_arr);
-
-        const rr = repr_arr;
+        const inner_len = reprLength(T);
+        const repr_len = 1 + inner_len;
+        const rr = blk: {
+            var res = [_]u8{0} ** (repr_len + 1);
+            res[0] = 'a';
+            getRepr(T, inner_len, 0, @as(*[inner_len]u8, @ptrCast(res[1..repr_len].ptr)));
+            res[repr_len] = 0;
+            break :blk res;
+        };
 
         return struct {
+            pub const SIGNATURE: [:0]const u8 = rr[0..repr_len :0];
             inner: []const T,
             repr: []const u8,
             const Self = @This();
@@ -321,6 +289,7 @@ pub const Value = struct {
         getRepr(T, repr_len, 0, &repr_arr);
         const rr = repr_arr;
         return struct {
+            pub const SIGNATURE = &rr;
             inner: T,
             repr: []const u8,
             const Self = @This();
@@ -349,16 +318,20 @@ pub const Value = struct {
         const key_repr_len = reprLength(K);
         const value_repr_len = reprLength(V);
 
-        const total_len = value_repr_len + key_repr_len + 2;
-        var rr = [_]u8{0} ** total_len;
-        rr[0] = '{';
-        rr[total_len - 1] = '}';
+        const total_len = value_repr_len + key_repr_len + 3;
+        const repr_arr = blk: {
+            var rr = [_]u8{0} ** (total_len + 1);
+            rr[0] = 'a';
+            rr[1] = '{';
+            rr[total_len - 1] = '}';
+            rr[total_len] = 0;
+            getRepr(K, key_repr_len, 0, @as(*[key_repr_len]u8, @ptrCast(rr[2 .. key_repr_len + 2].ptr)));
+            getRepr(V, value_repr_len, 0, @as(*[value_repr_len]u8, @ptrCast(rr[key_repr_len + 2 .. (total_len - 1)].ptr)));
+            break :blk rr;
+        };
 
-        getRepr(K, key_repr_len, 0, rr[1 .. key_repr_len + 1]);
-        getRepr(V, value_repr_len, 0, rr[key_repr_len + 1 .. (total_len - 1)]);
-
-        const repr_arr = rr;
         return struct {
+            pub const SIGNATURE: [:0]const u8 = repr_arr[0..total_len :0];
             inner: M,
             repr: []const u8,
             const Self = @This();
@@ -394,7 +367,15 @@ pub const Value = struct {
                     while (it.next()) |e| {
                         try w.padTo(8); // each dict-entry
                         try w.padTo(dbusAlignOf(K));
-                        try Serializer.trySerialize(K, e.key_ptr.*, w);
+                        const key = e.key_ptr.*;
+                        if (comptime K == GStr) {
+                            try w.padTo(4);
+                            try w.writeInt(u32, @intCast(key.len));
+                            try w.buffer.appendSlice(w.gpa, key);
+                            try w.buffer.append(w.gpa, 0);
+                        } else {
+                            try Serializer.trySerialize(K, key, w);
+                        }
                         try w.padTo(dbusAlignOf(V));
                         try Serializer.trySerialize(V, e.value_ptr.*, w);
                     }
@@ -409,7 +390,14 @@ pub const Value = struct {
                             const k = @field(ev, "key");
                             const v = @field(ev, "value");
                             try w.padTo(dbusAlignOf(K));
-                            try Serializer.trySerialize(K, k, w);
+                            if (comptime K == GStr) {
+                                try w.padTo(4);
+                                try w.writeInt(u32, @intCast(k.len));
+                                try w.buffer.appendSlice(w.gpa, k);
+                                try w.buffer.append(w.gpa, 0);
+                            } else {
+                                try Serializer.trySerialize(K, k, w);
+                            }
                             try w.padTo(dbusAlignOf(V));
                             try Serializer.trySerialize(V, v, w);
                         }
@@ -431,10 +419,8 @@ pub const Value = struct {
     pub fn Variant(comptime T: type) type {
         switch (@typeInfo(T)) {
             .@"union" => |_| {
-                if (!doesImplementSer(T)) {
-                    @compileError("pub fn ser(" ++ @typeName(T) ++ ", *std.ArrayList(u8), std.mem.Allocator) !void --- not found on " ++ @typeName(T) ++ " union.");
-                }
                 return struct {
+                    pub const SIGNATURE = "v";
                     inner: T,
                     repr: [:0]const u8,
                     const Self = @This();
@@ -450,21 +436,12 @@ pub const Value = struct {
                         // 1) write signature ('g'), 2) align to inner alignment, 3) write payload
                         switch (self.inner) {
                             inline else => |payload| {
-                                const U = @TypeOf(self.inner);
-                                const uinfo = @typeInfo(U).@"union";
-                                comptime var found = false;
-                                inline for (uinfo.fields) |f| {
-                                    if (!found and @field(self.inner, f.name) == payload) {
-                                        const PT = f.type;
-                                        // signature (1-aligned)
-                                        try w.writeSignatureOf(PT);
-                                        // align & write payload
-                                        try w.padTo(dbusAlignOf(PT));
-                                        try Serializer.trySerialize(PT, payload, w);
-                                        found = true;
-                                    }
-                                }
-                                if (!found) @compileError("Active union field not found");
+                                const PT = @TypeOf(payload);
+                                // signature (1-aligned)
+                                try w.writeSignatureOf(PT);
+                                // align & write payload
+                                try w.padTo(dbusAlignOf(PT));
+                                try Serializer.trySerialize(PT, payload, w);
                             },
                         }
                     }
@@ -486,6 +463,7 @@ pub const Value = struct {
         getRepr(S, repr_len, 0, &repr_arr);
         const rr = repr_arr;
         return struct {
+            pub const SIGNATURE = &rr;
             inner: S,
             repr: []const u8,
             const Self = @This();
@@ -693,6 +671,11 @@ pub const Value = struct {
 
 pub const Serializer = struct {
     pub fn trySerialize(comptime T: type, data: T, w: *DBusWriter) !void {
+        if (comptime Value.doesImplementSer(T)) {
+            try data.ser(w);
+            return;
+        }
+
         if (T == GStr) {
             try Value.String().new(data.s).ser(w);
             return;
