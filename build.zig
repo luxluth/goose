@@ -32,6 +32,44 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("test-app", "Run the test app");
     run_step.dependOn(&run_cmd.step);
 
+    const server_exe = b.addExecutable(.{
+        .name = "goose-server-test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests/server_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "goose", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(server_exe);
+    const run_server = b.addRunArtifact(server_exe);
+    if (b.args) |args| {
+        run_server.addArgs(args);
+    }
+    const server_step = b.step("test-server", "Run the server test app");
+    server_step.dependOn(&run_server.step);
+
+    const client_exe = b.addExecutable(.{
+        .name = "goose-client-test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests/client_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "goose", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(client_exe);
+    const run_client = b.addRunArtifact(client_exe);
+    if (b.args) |args| {
+        run_client.addArgs(args);
+    }
+    const client_step = b.step("test-client", "Run the client test app");
+    client_step.dependOn(&run_client.step);
+
     const intro_exe = b.addExecutable(.{
         .name = "goose-introspection",
         .root_module = b.createModule(.{

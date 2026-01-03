@@ -148,7 +148,11 @@ pub const Value = struct {
                 len += 1 + reprLength(info.child);
             },
             .pointer => |info| {
-                len += 1 + reprLength(info.child);
+                if (info.size == .slice) {
+                    len += 1 + reprLength(info.child);
+                } else {
+                    @compileError("Single pointers are not supported in D-Bus signatures: " ++ @typeName(T));
+                }
             },
             else => {
                 @compileLog(@typeInfo(T));
