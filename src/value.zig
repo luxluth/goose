@@ -61,7 +61,14 @@ pub fn dbusAlignOf(comptime T: type) usize {
             64 => 8,
             else => @compileError("Only f64 on D-Bus"),
         },
-        .@"struct" => |_| 8, // struct/dict-entry container
+        .@"struct" => |_| {
+            if (@hasDecl(T, "SIGNATURE")) {
+                const sig = T.SIGNATURE;
+                if (sig.len > 0 and sig[0] == 'a') return 4;
+                if (sig.len > 0 and sig[0] == 'v') return 1;
+            }
+            return 8; // struct/dict-entry container
+        },
         .@"union" => |_| 1, // 'v'
         .array => |_| 4, // 'a'
         .pointer => |_| 4, // 'a' (slice is encoded as array)

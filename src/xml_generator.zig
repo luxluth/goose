@@ -90,7 +90,7 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
     }
 
     try w.writeAll("  </interface>\n");
-    try w.writeAll("  <interface name=\"org.freedesktop.DBus.Introspectable\">");
+    try w.writeAll("  <interface name=\"org.freedesktop.DBus.Introspectable\">\n");
     try w.writeAll("    <method name=\"Introspect\">\n");
     try w.writeAll("      <arg name=\"xml_data\" type=\"s\" direction=\"out\"/>\n");
     try w.writeAll("    </method>\n");

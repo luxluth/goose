@@ -20,7 +20,8 @@ const MyInterface = struct {
     }
 
     pub fn Testing(self: *MyInterface) !GStr {
-        std.debug.print("MyInterface.test called!\n", .{});
+        std.debug.print("MyInterface.Testing called!\n", .{});
+        std.debug.print("Prop value: {d}\n", .{self.ThisIsAProps.value});
         try self.thisIsAsignal.trigger(self.conn, GStr.new("from the random Signal"));
         return GStr.new("Hello");
     }

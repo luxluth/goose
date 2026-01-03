@@ -38,8 +38,8 @@ pub fn main() !void {
     const xml = try intro_res.expect(GStr);
     std.debug.print("Client: Introspection XML:\n{s}\n", .{xml.s});
 
-    std.debug.print("Client: Calling testing()...\n", .{});
-    var result = try p.call("testing", .{});
+    std.debug.print("Client: Calling Testing()...\n", .{});
+    var result = try p.call("Testing", .{});
     defer result.deinit();
 
     const s = try result.expect(GStr);

@@ -588,7 +588,11 @@ pub const Connection = struct {
         for (m.header.header_fields) |f| if (f.code == .Sender) {
             dst = f.value.Sender;
         };
-        if (dst) |d| try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeZ(u8, d) } });
+        if (dst) |d| {
+            try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeZ(u8, d) } });
+        } else {
+            std.debug.print("WARN: No Sender in request, reply has no Destination!\n", .{});
+        }
         try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = try self.__allocator.dupeZ(u8, enc.signature()) } });
 
         const reply_h = core.MessageHeader{
