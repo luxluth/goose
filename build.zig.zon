@@ -2,7 +2,7 @@
     .name = .goose,
 
     .fingerprint = 0xf43488ea3033d37b,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .minimum_zig_version = "0.15.1",
 
     .dependencies = .{},

@@ -8,7 +8,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
     });
 
     const exe = b.addExecutable(.{
@@ -43,7 +42,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    b.installArtifact(server_exe);
+
     const run_server = b.addRunArtifact(server_exe);
     if (b.args) |args| {
         run_server.addArgs(args);
@@ -62,7 +61,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    b.installArtifact(client_exe);
+
     const run_client = b.addRunArtifact(client_exe);
     if (b.args) |args| {
         run_client.addArgs(args);
