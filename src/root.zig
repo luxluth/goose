@@ -117,8 +117,8 @@ const InterfaceWrapper = struct {
     instance: *anyopaque,
     dispatch: *const fn (wrapper: *const InterfaceWrapper, conn: *Connection, msg: core.Message) anyerror!void,
     destroy: *const fn (wrapper: *const InterfaceWrapper, allocator: std.mem.Allocator) void,
-    interface_name: []const u8, // For matching
-    path: []const u8, // For matching
+    interface_name: [:0]const u8, // For matching
+    path: [:0]const u8, // For matching
     intro_xml: [:0]const u8,
 };
 
@@ -517,6 +517,41 @@ pub const Connection = struct {
                                                         @field(self_obj, f.name) = new_val;
                                                     }
                                                     found = true;
+
+                                                    // Emit PropertiesChanged signal
+                                                    {
+                                                        const VariantType = Value.Variant(PropUnion);
+                                                        var dict = std.StringHashMap(VariantType).init(conn.__allocator);
+                                                        defer dict.deinit();
+
+                                                        try dict.put(f.name, VariantType.new(@unionInit(PropUnion, f.name, new_val)));
+
+                                                        const empty_strs = [_]GStr{};
+                                                        const args = .{ GStr.new(w.interface_name), Value.Dict(GStr, VariantType, std.StringHashMap(VariantType)).new(dict), Value.Array(GStr).new(&empty_strs) };
+
+                                                        var sig_encoder = try message.BodyEncoder.encode(conn.__allocator, args);
+                                                        defer sig_encoder.deinit();
+
+                                                        const serial = conn.serial_counter;
+                                                        conn.serial_counter += 1;
+
+                                                        const sig_header = core.MessageHeader{
+                                                            .message_type = .Signal,
+                                                            .flags = 0,
+                                                            .proto_version = 1,
+                                                            .body_length = @intCast(sig_encoder.body().len),
+                                                            .serial = serial,
+                                                            .header_fields = @constCast(&[_]core.HeaderField{
+                                                                .{ .code = .Path, .value = .{ .Path = w.path } },
+                                                                .{ .code = .Interface, .value = .{ .Interface = "org.freedesktop.DBus.Properties" } },
+                                                                .{ .code = .Member, .value = .{ .Member = "PropertiesChanged" } },
+                                                                .{ .code = .Signature, .value = .{ .Signature = sig_encoder.signature() } },
+                                                            }),
+                                                        };
+
+                                                        const sig_msg = core.Message.new(sig_header, sig_encoder.body());
+                                                        try conn.sendMessage(sig_msg);
+                                                    }
                                                 }
                                             }
                                         }

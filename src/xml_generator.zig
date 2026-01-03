@@ -111,6 +111,11 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
     try w.writeAll("      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
     try w.writeAll("      <arg name=\"props\" type=\"a{sv}\" direction=\"out\"/>\n");
     try w.writeAll("    </method>\n");
+    try w.writeAll("    <signal name=\"PropertiesChanged\">\n");
+    try w.writeAll("      <arg name=\"interface_name\" type=\"s\"/>\n");
+    try w.writeAll("      <arg name=\"changed_properties\" type=\"a{sv}\"/>\n");
+    try w.writeAll("      <arg name=\"invalidated_properties\" type=\"as\"/>\n");
+    try w.writeAll("    </signal>\n");
     try w.writeAll("  </interface>\n");
     try w.writeAll("</node>\n");
 
