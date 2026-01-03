@@ -2,6 +2,7 @@ const std = @import("std");
 const core = @import("core.zig");
 const Value = core.value.Value;
 
+/// Generates a D-Bus introspection XML string for a Zig type T.
 pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, interface_name: []const u8) ![:0]const u8 {
     var out = try std.ArrayList(u8).initCapacity(allocator, 1024);
     errdefer out.deinit(allocator);

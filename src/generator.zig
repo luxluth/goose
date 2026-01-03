@@ -1,6 +1,7 @@
 const std = @import("std");
 const introspection = @import("introspection.zig");
 
+/// Generates Zig Proxy source code from a D-Bus Node tree.
 pub fn generate(allocator: std.mem.Allocator, node: introspection.Node, dest: ?[]const u8, path: ?[]const u8) ![]const u8 {
     var out = try std.ArrayList(u8).initCapacity(allocator, 0);
     errdefer out.deinit(allocator);

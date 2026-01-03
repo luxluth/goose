@@ -23,7 +23,7 @@ pub const MethodResult = struct {
         return BodyDecoder.fromMessage(self.conn.__allocator, self.msg);
     }
 
-    /// Convenience method to decode a single value of type T.
+    /// Convenience method to decode a single value of type T from the reply body.
     /// Note: The MethodResult must still be explicitly deinitialized after use
     /// if T borrows memory (like strings or slices) from the message body.
     pub fn expect(self: *MethodResult, comptime T: type) !T {
@@ -40,6 +40,9 @@ pub const Proxy = struct {
     interface: [:0]const u8,
 
     /// Creates a new Proxy for a remote object.
+    /// `dest`: The well-known name or unique name of the destination connection.
+    /// `path`: The object path on the destination.
+    /// `interface`: The default interface to use for method calls.
     pub fn init(conn: *Connection, dest: [:0]const u8, path: [:0]const u8, interface: [:0]const u8) Proxy {
         return .{
             .conn = conn,
@@ -49,6 +52,7 @@ pub const Proxy = struct {
         };
     }
 
+    /// Performs a low-level method call on a specific interface.
     pub fn rawCall(self: Proxy, iface: [:0]const u8, method: [:0]const u8, args: anytype) !MethodResult {
         var encoder = try BodyEncoder.encode(self.conn.__allocator, args);
         defer encoder.deinit();
@@ -77,7 +81,7 @@ pub const Proxy = struct {
         };
     }
 
-    /// Invokes a method on the remote object.
+    /// Invokes a method on the remote object using the default interface.
     /// `args` can be a single value or a tuple of values.
     /// Returns a MethodResult owning the reply message.
     pub fn call(self: Proxy, method: [:0]const u8, args: anytype) !MethodResult {

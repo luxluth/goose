@@ -76,33 +76,37 @@ pub fn dbusAlignOf(comptime T: type) usize {
     };
 }
 
-/// String wrapper
+/// A wrapper for D-Bus string values.
 pub const GStr = struct {
     s: [:0]const u8,
+    /// Creates a new GStr from a null-terminated string.
     pub fn new(s: [:0]const u8) @This() {
         return .{ .s = s };
     }
 };
 
-/// ObjectPath wrapper
+/// A wrapper for D-Bus object path values.
 pub const GPath = struct {
     s: [:0]const u8,
+    /// Creates a new GPath from a null-terminated string.
     pub fn new(s: [:0]const u8) @This() {
         return .{ .s = s };
     }
 };
 
-/// Signature wrapper
+/// A wrapper for D-Bus signature values.
 pub const GSig = struct {
     s: [:0]const u8,
+    /// Creates a new GSig from a null-terminated string.
     pub fn new(s: [:0]const u8) @This() {
         return .{ .s = s };
     }
 };
 
-/// Unix fd wrapper
+/// A wrapper for D-Bus Unix file descriptor values.
 pub const GUFd = struct {
     fd: u32,
+    /// Creates a new GUFd from a file descriptor.
     pub fn new(fd: u32) @This() {
         return .{ .fd = fd };
     }

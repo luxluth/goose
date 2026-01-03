@@ -8,7 +8,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var conn = try goose.Connection.init(allocator);
+    var conn = try goose.Connection.init(allocator, .Session);
     defer conn.close();
 
     try conn.addMatch("type='signal',interface='dev.myinterface.test'");

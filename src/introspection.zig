@@ -30,11 +30,13 @@ pub const Interface = struct {
     properties: []const Property,
 };
 
+/// Represents a node in the D-Bus object hierarchy, containing interfaces and child nodes.
 pub const Node = struct {
     name: []const u8 = "",
     interfaces: []const Interface,
     children: []const Node,
 
+    /// Recursively releases memory used by the node and its children.
     pub fn deinit(self: Node, allocator: std.mem.Allocator) void {
         for (self.interfaces) |iface| {
             for (iface.methods) |m| allocator.free(m.args);
@@ -119,6 +121,7 @@ const Scanner = struct {
     }
 };
 
+/// Parses a D-Bus introspection XML string into a Node tree.
 pub fn parse(allocator: std.mem.Allocator, xml: []const u8) !Node {
     var scanner = Scanner{ .xml = xml };
     var interfaces = try std.ArrayList(Interface).initCapacity(allocator, 0);

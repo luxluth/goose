@@ -18,7 +18,7 @@ pub fn main() !void {
     const dest = args[1];
     const path = args[2];
 
-    var conn = try goose.Connection.init(allocator);
+    var conn = try goose.Connection.init(allocator, .Session);
     defer conn.close();
 
     const dbus_proxy = goose.proxy.Proxy.init(&conn, @ptrCast(dest), @ptrCast(path), "org.freedesktop.DBus.Introspectable");

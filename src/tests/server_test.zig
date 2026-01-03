@@ -6,9 +6,7 @@ const GStr = goose.core.value.GStr;
 
 const MyInterface = struct {
     conn: *Connection,
-    // Properties (not yet supported in dispatch logic, but struct field is fine)
     ThisIsAProps: goose.Property(i32, .ReadWrite) = goose.property(i32, .ReadWrite, 43),
-    // Signal
     thisIsAsignal: goose.Signal(GStr) = signal("thisIsAsignal", GStr),
 
     pub const INTERFACE_NAME = "dev.myinterface.test";
@@ -34,7 +32,7 @@ pub fn main() !void {
 
     std.debug.print("Initializing connection...\n", .{});
     // Note: This requires a running DBus session bus.
-    var conn = try Connection.init(allocator);
+    var conn = try Connection.init(allocator, .Session);
     defer conn.close();
 
     std.debug.print("Registering interface {s}...\n", .{MyInterface.INTERFACE_NAME});

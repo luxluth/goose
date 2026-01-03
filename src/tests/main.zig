@@ -47,7 +47,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var conn = try Connection.init(allocator);
+    var conn = try Connection.init(allocator, .Session);
     defer conn.close();
 
     // Example 1: Call GetId (no args, returns string)

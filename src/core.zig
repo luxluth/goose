@@ -139,7 +139,7 @@ pub const HeaderField = struct {
     value: HeaderFieldValue,
 };
 
-/// Message type
+/// The type of a D-Bus message.
 pub const MessageType = enum(u8) {
     /// This is an invalid type.
     Invalid = 0,
@@ -206,6 +206,7 @@ pub const MessageFlag = enum(u8) {
     AllowInteractiveAuthorization = 0x4,
 };
 
+/// Represents the header of a D-Bus message.
 pub const MessageHeader = struct {
     /// Endianness flag; ASCII 'l' for little-endian or ASCII 'B' for big-endian.
     /// Both header and body are in this endianness.
@@ -234,10 +235,7 @@ pub const MessageHeader = struct {
     /// fields are required.
     header_fields: []const HeaderField,
 
-    ///  The length of the header must be a multiple of 8, allowing the body to begin
-    ///  on an 8-byte boundary when storing the entire message in a single buffer.
-    ///  If the header does not naturally end on an 8-byte boundary up to 7 bytes
-    ///  of nul-initialized alignment padding must be added.
+    /// Packs the message header into its wire format.
     pub fn pack(self: MessageHeader, allocator: std.mem.Allocator) !std.ArrayList(u8) {
         const Byte = Value.Byte();
         const U32 = Value.Uint32();
@@ -292,10 +290,12 @@ pub const MessageHeader = struct {
     }
 };
 
+/// Represents a D-Bus message, including its header and body.
 pub const Message = struct {
     header: MessageHeader,
     body: []const u8,
 
+    /// Creates a new Message.
     pub fn new(header: MessageHeader, body: []const u8) Message {
         return Message{
             .header = header,
@@ -309,6 +309,8 @@ pub const Message = struct {
     //
     //     return headerBytes;
     // }
+
+    /// Packs the message into its wire format.
     pub fn pack(self: Message, allocator: std.mem.Allocator) !std.ArrayList(u8) {
         // Ensure header has correct body_length
         var hdr = self.header;
