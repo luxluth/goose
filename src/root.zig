@@ -125,18 +125,18 @@ const InterfaceWrapper = struct {
 pub const Connection = struct {
     __inner_sock: net.Stream,
     __allocator: std.mem.Allocator,
+    __reader_buf: []u8,
+    __reader: net.Stream.Reader,
     serial_counter: u32 = 1,
     pending_messages: std.ArrayList(core.Message),
     signal_handlers: std.ArrayList(SignalHandler),
     registered_interfaces: std.ArrayList(InterfaceWrapper),
 
-    fn auth(socket: net.Stream) !void {
-        var reader_buffer: [2048]u8 = undefined;
-        var reader = socket.reader(&reader_buffer);
-        const io_reader: *std.Io.Reader = reader.interface();
+    fn auth(conn: *Connection) !void {
+        const reader: *std.io.Reader = conn.__reader.interface();
 
         var writer_buffer: [2048]u8 = undefined;
-        var writer = socket.writer(&writer_buffer);
+        var writer = conn.__inner_sock.writer(&writer_buffer);
         var io_writer = &writer.interface;
 
         const uid: u32 = std.posix.getuid();
@@ -159,7 +159,7 @@ pub const Connection = struct {
         try io_writer.print("AUTH EXTERNAL {s}\r\n", .{hex});
         try io_writer.flush();
 
-        const response = try io_reader.takeDelimiterInclusive('\n');
+        const response = try reader.takeDelimiterInclusive('\n');
         if (!std.mem.startsWith(u8, response, "OK")) {
             return error.HandshakeFail;
         }
@@ -175,15 +175,20 @@ pub const Connection = struct {
         const socket_path = try extractUnixSocketPath(bus_address);
         const socket = try net.connectUnixSocket(socket_path);
 
-        try auth(socket);
+        const reader_buf = try allocator.alloc(u8, 4096 * 10);
+        errdefer allocator.free(reader_buf);
 
         var conn = Connection{
             .__inner_sock = socket,
             .__allocator = allocator,
+            .__reader_buf = reader_buf,
+            .__reader = socket.reader(reader_buf),
             .pending_messages = try std.ArrayList(core.Message).initCapacity(allocator, 10),
             .signal_handlers = try std.ArrayList(SignalHandler).initCapacity(allocator, 0),
             .registered_interfaces = try std.ArrayList(InterfaceWrapper).initCapacity(allocator, 0),
         };
+
+        try auth(&conn);
 
         try conn.sayHello();
 
@@ -232,6 +237,7 @@ pub const Connection = struct {
         }
         self.registered_interfaces.deinit(self.__allocator);
 
+        self.__allocator.free(self.__reader_buf);
         self.__inner_sock.close();
     }
 
@@ -820,10 +826,8 @@ pub const Connection = struct {
 
     fn readNextMessage(self: *Connection) !core.Message {
         var header_buf: [16]u8 = undefined;
-        var reader_buf: [4096 * 10]u8 = undefined;
 
-        var stream_reader = self.__inner_sock.reader(&reader_buf);
-        const reader: *std.Io.Reader = stream_reader.interface();
+        const reader: *std.io.Reader = self.__reader.interface();
 
         try reader.readSliceAll(&header_buf);
 
@@ -847,7 +851,7 @@ pub const Connection = struct {
         const current_pos = 16 + fields_len;
         const padding = (8 - (current_pos % 8)) % 8;
         if (padding > 0) {
-            reader.seek += padding;
+            try reader.discardAll(padding);
         }
 
         // Read body
@@ -868,64 +872,48 @@ pub const Connection = struct {
         }
 
         var freader = std.io.Reader.fixed(fields_bytes);
-        var fpos: usize = 0;
 
-        while (fpos < fields_len) {
-            const padding_f = (8 - (fpos % 8)) % 8;
+        while (freader.seek < fields_len) {
+            const padding_f = (8 - (freader.seek % 8)) % 8;
             if (padding_f > 0) {
-                freader.seek += padding_f;
-                fpos += padding_f;
+                try freader.discardAll(padding_f);
             }
-            if (fpos >= fields_len) break;
+            if (freader.seek >= fields_len) break;
 
             const code_u8 = try freader.takeByte();
-            fpos += 1;
             const code: core.HeaderFieldCode = if (code_u8 <= 9) @enumFromInt(code_u8) else .Invalid;
 
             // Variant signature (we assume standard fields have correct types)
             const sig_len = try freader.takeByte();
-            fpos += 1;
-            freader.seek += sig_len + 1; // sig + null
-            fpos += sig_len + 1;
+            try freader.discardAll(sig_len + 1); // sig + null
 
             switch (code) {
                 .ReplySerial => {
-                    const pad4 = (4 - (fpos % 4)) % 4;
-                    freader.seek += pad4;
-                    fpos += pad4;
+                    const pad4 = (4 - (freader.seek % 4)) % 4;
+                    try freader.discardAll(pad4);
                     const val = try freader.takeInt(u32, endian);
-                    fpos += @sizeOf(u32);
                     try fields_list.append(self.__allocator, .{ .code = .ReplySerial, .value = .{ .ReplySerial = val } });
                 },
                 .UnixFds => {
-                    const pad4 = (4 - (fpos % 4)) % 4;
-                    freader.seek += pad4;
-                    fpos += pad4;
+                    const pad4 = (4 - (freader.seek % 4)) % 4;
+                    try freader.discardAll(pad4);
                     const val = try freader.takeInt(u32, endian);
-                    fpos += 4;
                     try fields_list.append(self.__allocator, .{ .code = .UnixFds, .value = .{ .UnixFds = val } });
                 },
                 .Signature => {
                     const s_len = try freader.takeByte();
-                    fpos += 1;
                     const s_owned = try self.__allocator.allocSentinel(u8, s_len, 0);
                     try freader.readSliceAll(s_owned);
-                    fpos += s_len;
-                    freader.seek += 1; // null
-                    fpos += 1;
+                    try freader.discardAll(1); // null
                     try fields_list.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = s_owned } });
                 },
                 .Path, .Interface, .Member, .ErrorName, .Destination, .Sender => |c| {
-                    const pad4 = (4 - (fpos % 4)) % 4;
-                    freader.seek += pad4;
-                    fpos += pad4;
+                    const pad4 = (4 - (freader.seek % 4)) % 4;
+                    try freader.discardAll(pad4);
                     const s_len = try freader.takeInt(u32, endian);
-                    fpos += 4;
                     const s_owned = try self.__allocator.allocSentinel(u8, s_len, 0);
                     try freader.readSliceAll(s_owned);
-                    fpos += s_len;
-                    freader.seek += 1;
-                    fpos += 1;
+                    try freader.discardAll(1); // null
 
                     const hfv: core.HeaderFieldValue = switch (c) {
                         .Path => .{ .Path = s_owned },
@@ -995,6 +983,7 @@ pub const Connection = struct {
             }
 
             // Read new message
+
             const msg = try self.readNextMessage();
 
             // Check if it is the reply
