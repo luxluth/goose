@@ -314,6 +314,49 @@ pub const Connection = struct {
         try self.sendMessage(core.Message.new(reply_h, enc.body()));
     }
 
+    /// Sends an Error reply to a message.
+    pub fn sendError(self: *Connection, m: core.Message, error_name: [:0]const u8, error_msg: [:0]const u8) !void {
+        var reply_fields = try std.ArrayList(core.HeaderField).initCapacity(self.__allocator, 4);
+        defer {
+            for (reply_fields.items) |f| {
+                switch (f.value) {
+                    .Destination, .ErrorName, .Signature => |s| self.__allocator.free(s),
+                    else => {},
+                }
+            }
+            reply_fields.deinit(self.__allocator);
+        }
+
+        try reply_fields.append(self.__allocator, .{ .code = .ReplySerial, .value = .{ .ReplySerial = m.header.serial } });
+        try reply_fields.append(self.__allocator, .{ .code = .ErrorName, .value = .{ .ErrorName = try self.__allocator.dupeZ(u8, error_name) } });
+
+        var dst: ?[:0]const u8 = null;
+        for (m.header.header_fields) |f| if (f.code == .Sender) {
+            dst = f.value.Sender;
+        };
+        if (dst) |d| {
+            try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeZ(u8, d) } });
+        } else {
+            std.debug.print("WARN: No Sender in request, error reply has no Destination!\n", .{});
+        }
+
+        var encoder = try message.BodyEncoder.encode(self.__allocator, GStr.new(error_msg));
+        defer encoder.deinit();
+
+        try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = try self.__allocator.dupeZ(u8, encoder.signature()) } });
+
+        const reply_h = core.MessageHeader{
+            .message_type = .Error,
+            .flags = 0,
+            .proto_version = 1,
+            .body_length = @intCast(encoder.body().len),
+            .serial = self.serial_counter,
+            .header_fields = reply_fields.items,
+        };
+        self.serial_counter += 1;
+        try self.sendMessage(core.Message.new(reply_h, encoder.body()));
+    }
+
     /// Runs the main loop, blocking and handling messages for the registered objects.
     pub fn waitOnHandle(self: *Connection, handle: usize) !void {
         if (handle >= self.registered_interfaces.items.len) return error.InvalidHandle;

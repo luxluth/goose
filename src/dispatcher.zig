@@ -68,7 +68,10 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
             if (iface_name != null and std.mem.eql(u8, iface_name.?, "org.freedesktop.DBus.Properties")) {
                 if (std.mem.eql(u8, member, "GetAll")) {
                     var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
-                    const requested_iface = try decoder.decode(GStr);
+                    const requested_iface = decoder.decode(GStr) catch {
+                        try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid interface argument");
+                        return;
+                    };
                     if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
                         const VariantType = Value.Variant(PropUnion);
                         var dict = std.StringHashMap(VariantType).init(conn.__allocator);
@@ -81,7 +84,7 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                             const is_wrapped = type_info == .@"struct" and @hasDecl(FType, "__is_goose_property");
                             const is_prop = is_wrapped or blk: {
                                 const is_signal = (type_info == .@"struct" and @hasDecl(FType, "__is_goose_signal"));
-                                const is_conn = std.mem.eql(u8, f.name, "conn");
+                                const is_conn = f.type == *Connection; //std.mem.eql(u8, f.name, "conn");
                                 const is_ptr = (type_info == .pointer and type_info.pointer.size != .slice);
                                 break :blk !is_signal and !is_conn and !is_ptr;
                             };
@@ -108,8 +111,14 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                     return;
                 } else if (std.mem.eql(u8, member, "Get")) {
                     var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
-                    const requested_iface = try decoder.decode(GStr);
-                    const prop_name = try decoder.decode(GStr);
+                    const requested_iface = decoder.decode(GStr) catch {
+                        try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid interface argument");
+                        return;
+                    };
+                    const prop_name = decoder.decode(GStr) catch {
+                        try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid property name argument");
+                        return;
+                    };
 
                     if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
                         const VariantType = Value.Variant(PropUnion);
@@ -150,9 +159,18 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                     return;
                 } else if (std.mem.eql(u8, member, "Set")) {
                     var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
-                    const requested_iface = try decoder.decode(GStr);
-                    const prop_name = try decoder.decode(GStr);
-                    const val_union = try decoder.decode(PropUnion);
+                    const requested_iface = decoder.decode(GStr) catch {
+                        try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid interface argument");
+                        return;
+                    };
+                    const prop_name = decoder.decode(GStr) catch {
+                        try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid property name argument");
+                        return;
+                    };
+                    const val_union = decoder.decode(PropUnion) catch {
+                        try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidSignature", "Property value signature mismatch");
+                        return;
+                    };
 
                     if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
                         var found = false;
