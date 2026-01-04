@@ -140,7 +140,7 @@ A tool to introspect a D-Bus object and output its XML definition.
 Generate type-safe Zig bindings from D-Bus introspection XML.
 
 ```bash
-./zig-out/bin/goose-generate <xml_file>
+./zig-out/bin/goose-generate <destination> <path>
 ```
 
 ## License
