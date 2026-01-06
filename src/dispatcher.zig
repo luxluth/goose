@@ -269,7 +269,16 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                         const fn_info = @typeInfo(field_type).@"fn";
                         if (fn_info.params.len > 0 and fn_info.params[0].type == *T) {
                             if (std.mem.eql(u8, member, decl.name)) {
-                                const result = try @call(.auto, field_val, .{self_obj});
+                                var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
+                                const ArgsType = std.meta.ArgsTuple(field_type);
+                                var args: ArgsType = undefined;
+                                args[0] = self_obj;
+
+                                inline for (fn_info.params[1..], 1..) |param, i| {
+                                    args[i] = try decoder.decode(param.type.?);
+                                }
+
+                                const result = try @call(.auto, field_val, args);
                                 var encoder = try message.BodyEncoder.encode(conn.__allocator, result);
                                 defer encoder.deinit();
                                 try conn.sendReply(msg, encoder);

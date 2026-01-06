@@ -391,8 +391,9 @@ pub const Value = struct {
                         try Serializer.trySerialize(V, e.value_ptr.*, w);
                     }
                 } else switch (@typeInfo(@TypeOf(self.inner))) {
-                    .slice => |si| {
-                        const Elem = si.child;
+                    .pointer => |pi| {
+                        if (pi.size != .slice) return error.UnsupportedDictBacking;
+                        const Elem = pi.child;
                         const einfo = @typeInfo(Elem);
                         if (einfo != .@"struct") return error.UnsupportedDictBacking;
                         inline for (einfo.@"struct".fields) |_| {} // keep einfo constexpr
@@ -403,8 +404,8 @@ pub const Value = struct {
                             try w.padTo(dbusAlignOf(K));
                             if (comptime K == GStr) {
                                 try w.padTo(4);
-                                try w.writeInt(u32, @intCast(k.len));
-                                try w.buffer.appendSlice(w.gpa, k);
+                                try w.writeInt(u32, @intCast(k.s.len));
+                                try w.buffer.appendSlice(w.gpa, k.s);
                                 try w.buffer.append(w.gpa, 0);
                             } else {
                                 try Serializer.trySerialize(K, k, w);
@@ -443,7 +444,7 @@ pub const Value = struct {
                         };
                     }
 
-                    pub fn ser(self: Self, w: *DBusWriter) !void {
+                    pub fn ser(self: Self, w: *DBusWriter) anyerror!void {
                         // 1) write signature ('g'), 2) align to inner alignment, 3) write payload
                         switch (self.inner) {
                             inline else => |payload| {
