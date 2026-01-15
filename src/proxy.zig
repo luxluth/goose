@@ -11,16 +11,18 @@ const GStr = core.value.GStr;
 pub const MethodResult = struct {
     msg: core.Message,
     conn: *Connection,
+    arena: std.heap.ArenaAllocator,
 
     /// Releases resources associated with the result message.
     pub fn deinit(self: *MethodResult) void {
         self.conn.freeMessage(&self.msg);
+        self.arena.deinit();
     }
 
     /// Returns a BodyDecoder to read the result body.
     /// Note: The decoder's lifetime is tied to the result.
     pub fn reader(self: *MethodResult) BodyDecoder {
-        return BodyDecoder.fromMessage(self.conn.__allocator, self.msg);
+        return BodyDecoder.fromMessage(self.arena.allocator(), self.msg);
     }
 
     /// Convenience method to decode a single value of type T from the reply body.
@@ -78,6 +80,7 @@ pub const Proxy = struct {
         return MethodResult{
             .msg = reply,
             .conn = self.conn,
+            .arena = std.heap.ArenaAllocator.init(self.conn.__allocator),
         };
     }
 
@@ -95,7 +98,7 @@ pub const Proxy = struct {
     pub fn getProperty(self: Proxy, comptime T: type, name: [:0]const u8) !T {
         var result = try self.rawCall("org.freedesktop.DBus.Properties", "Get", .{ GStr.new(self.interface), GStr.new(name) });
         defer result.deinit();
-        var dec = result.reader();
+        var dec = BodyDecoder.fromMessage(self.conn.__allocator, result.msg);
         return try dec.decodeAlloc(T);
     }
 

@@ -132,56 +132,28 @@ pub const BodyDecoder = struct {
 
         self.alignTo(dbusAlignOf(T));
 
-        return self.readVal(T);
+        return self.readVal(T, false);
     }
 
     /// Decodes the next value of type T and allocates memory for it (recursive deep-copy).
     /// This allows the returned value to outlive the decoder and the message body.
     pub fn decodeAlloc(self: *BodyDecoder, comptime T: type) anyerror!T {
-        const val = try self.decode(T);
-        return try self.cloneVal(T, val);
-    }
+        const sig_len = Value.reprLength(T);
+        var expected_sig: [256]u8 = undefined;
+        Value.getRepr(T, sig_len, 0, expected_sig[0..sig_len]);
 
-    fn cloneVal(self: *BodyDecoder, comptime T: type, val: T) anyerror!T {
-        switch (@typeInfo(T)) {
-            .int, .bool, .float, .@"enum" => return val,
-            .@"struct" => |info| {
-                if (T == core.value.GStr or T == core.value.GPath or T == core.value.GSig) {
-                    const s = try self.allocator.allocSentinel(u8, val.s.len, 0);
-                    @memcpy(s, val.s);
-                    return T.new(s);
-                }
-                var result: T = undefined;
-                inline for (info.fields) |fld| {
-                    @field(result, fld.name) = try self.cloneVal(fld.type, @field(val, fld.name));
-                }
-                return result;
-            },
-            .pointer => |info| {
-                if (info.size != .slice) return error.UnsupportedType;
-                const Elem = info.child;
-                const new_slice = try self.allocator.alloc(Elem, val.len);
-                errdefer self.allocator.free(new_slice);
-
-                for (val, 0..) |v, i| {
-                    new_slice[i] = try self.cloneVal(Elem, v);
-                }
-                return new_slice;
-            },
-            .@"union" => |info| {
-                const tag = std.meta.activeTag(val);
-                inline for (info.fields) |fld| {
-                    if (std.mem.eql(u8, fld.name, @tagName(tag))) {
-                        return @unionInit(T, fld.name, try self.cloneVal(fld.type, @field(val, fld.name)));
-                    }
-                }
-                unreachable;
-            },
-            else => return error.UnsupportedType,
+        if (self.sig_pos + sig_len > self.signature.len) return error.SignatureEnd;
+        if (!std.mem.eql(u8, self.signature[self.sig_pos .. self.sig_pos + sig_len], expected_sig[0..sig_len])) {
+            return error.SignatureMismatch;
         }
+        self.sig_pos += sig_len;
+
+        self.alignTo(dbusAlignOf(T));
+
+        return self.readVal(T, true);
     }
 
-    fn readVal(self: *BodyDecoder, comptime T: type) anyerror!T {
+    fn readVal(self: *BodyDecoder, comptime T: type, comptime deep_copy: bool) anyerror!T {
         switch (@typeInfo(T)) {
             .int => |info| {
                 const size = info.bits / 8;
@@ -217,7 +189,13 @@ pub const BodyDecoder = struct {
                     const s = self.body[self.pos .. self.pos + len :0];
                     self.pos += len + 1;
 
-                    return T.new(s);
+                    if (deep_copy) {
+                        const new_s = try self.allocator.allocSentinel(u8, s.len, 0);
+                        @memcpy(new_s, s);
+                        return T.new(new_s);
+                    } else {
+                        return T.new(s);
+                    }
                 } else if (T == core.value.GSig) {
                     // Signature reading: u8 len, bytes, null
                     if (self.pos + 1 > self.body.len) return error.EndOfBody;
@@ -230,7 +208,13 @@ pub const BodyDecoder = struct {
                     const s = self.body[self.pos .. self.pos + len :0];
                     self.pos += len + 1;
 
-                    return T.new(s);
+                    if (deep_copy) {
+                        const new_s = try self.allocator.allocSentinel(u8, s.len, 0);
+                        @memcpy(new_s, s);
+                        return T.new(new_s);
+                    } else {
+                        return T.new(s);
+                    }
                 }
 
                 // Generic struct/tuple/dict-entry support
@@ -238,7 +222,7 @@ pub const BodyDecoder = struct {
                 var result: T = undefined;
                 inline for (info.fields) |fld| {
                     self.alignTo(dbusAlignOf(fld.type));
-                    @field(result, fld.name) = try self.readVal(fld.type);
+                    @field(result, fld.name) = try self.readVal(fld.type, deep_copy);
                 }
                 return result;
             },
@@ -247,7 +231,7 @@ pub const BodyDecoder = struct {
                 const Elem = info.child;
 
                 // Read byte length (u32)
-                const byte_len = try self.readVal(u32);
+                const byte_len = try self.readVal(u32, false); // No need to deep copy length
 
                 // Align to element boundary
                 self.alignTo(dbusAlignOf(Elem));
@@ -260,14 +244,14 @@ pub const BodyDecoder = struct {
 
                 while (self.pos - start_pos < byte_len) {
                     self.alignTo(dbusAlignOf(Elem));
-                    try list.append(self.allocator, try self.readVal(Elem));
+                    try list.append(self.allocator, try self.readVal(Elem, deep_copy));
                 }
                 return try list.toOwnedSlice(self.allocator);
             },
             .@"union" => |info| {
                 // Variants on wire: signature ('g'), then aligned value.
                 const GSig = core.value.GSig;
-                const inner_sig_struct = try self.readVal(GSig);
+                const inner_sig_struct = try self.readVal(GSig, false); // Signature borrowed is fine here for comparison
                 const inner_sig = inner_sig_struct.s;
 
                 inline for (info.fields) |fld| {
@@ -277,7 +261,7 @@ pub const BodyDecoder = struct {
 
                     if (std.mem.eql(u8, inner_sig, fld_sig_buf[0..fld_sig_len])) {
                         self.alignTo(dbusAlignOf(fld.type));
-                        return @unionInit(T, fld.name, try self.readVal(fld.type));
+                        return @unionInit(T, fld.name, try self.readVal(fld.type, deep_copy));
                     }
                 }
                 return error.NoMatchingUnionField;
