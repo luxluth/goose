@@ -9,21 +9,26 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
 
-    var conn = try goose.Connection.init(allocator, .Session);
-    defer conn.close();
-
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
 
     _ = args.next(); // skip program name
     const dest = args.next() orelse {
-        std.debug.print("Usage: goose-introspection <dest> <path>\n", .{});
+        std.debug.print("Usage: goose-introspection <dest> <path> <bustype>\n", .{});
         return;
     };
     const path = args.next() orelse {
-        std.debug.print("Usage: goose-introspection <dest> <path>\n", .{});
+        std.debug.print("Usage: goose-introspection <dest> <path> <bustype>\n", .{});
         return;
     };
+    const bustype_string = args.next() orelse {
+        std.debug.print("Usage: goose-introspection <dest> <path> <bustype>\n", .{});
+        return;
+    };
+    const bustype = std.meta.stringToEnum(goose.BusType, bustype_string).?;
+
+    var conn = try goose.Connection.init(allocator, bustype);
+    defer conn.close();
 
     std.debug.print("Target: {s} {s}\n", .{ dest, path });
 
