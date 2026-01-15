@@ -10,8 +10,14 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     if (args.len < 4) {
-        std.debug.print("Usage: {s} <dest> <path> <bustype>\n", .{args[0]});
-        std.debug.print("Example: {s} org.freedesktop.DBus /org/freedesktop/DBus Session\n", .{args[0]});
+        const prog_name = std.fs.path.basename(args[0]);
+        std.debug.print("Usage: {s} <destination> <object_path> <bus_type>\n", .{prog_name});
+        std.debug.print("\nArguments:\n", .{});
+        std.debug.print("  <destination>  The well-known name of the service (e.g. org.freedesktop.DBus)\n", .{});
+        std.debug.print("  <object_path>  The object path to introspect (e.g. /org/freedesktop/DBus)\n", .{});
+        std.debug.print("  <bus_type>     The bus to connect to: 'Session' or 'System'\n", .{});
+        std.debug.print("\nExample:\n", .{});
+        std.debug.print("  {s} org.freedesktop.DBus /org/freedesktop/DBus Session\n", .{prog_name});
         return;
     }
 

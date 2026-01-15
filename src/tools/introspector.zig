@@ -12,19 +12,27 @@ pub fn main() !void {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
 
-    _ = args.next(); // skip program name
-    const dest = args.next() orelse {
-        std.debug.print("Usage: goose-introspection <dest> <path> <bustype>\n", .{});
+    const prog_path = args.next() orelse "introspector";
+    const prog_name = std.fs.path.basename(prog_path);
+
+    const dest_arg = args.next();
+    const path_arg = args.next();
+    const bustype_arg = args.next();
+
+    if (dest_arg == null or path_arg == null or bustype_arg == null) {
+        std.debug.print("Usage: {s} <destination> <object_path> <bus_type>\n", .{prog_name});
+        std.debug.print("\nArguments:\n", .{});
+        std.debug.print("  <destination>  The well-known name of the service (e.g. org.freedesktop.DBus)\n", .{});
+        std.debug.print("  <object_path>  The object path to introspect (e.g. /org/freedesktop/DBus)\n", .{});
+        std.debug.print("  <bus_type>     The bus to connect to: 'Session' or 'System'\n", .{});
+        std.debug.print("\nExample:\n", .{});
+        std.debug.print("  {s} org.freedesktop.DBus /org/freedesktop/DBus Session\n", .{prog_name});
         return;
-    };
-    const path = args.next() orelse {
-        std.debug.print("Usage: goose-introspection <dest> <path> <bustype>\n", .{});
-        return;
-    };
-    const bustype_string = args.next() orelse {
-        std.debug.print("Usage: goose-introspection <dest> <path> <bustype>\n", .{});
-        return;
-    };
+    }
+
+    const dest = dest_arg.?;
+    const path = path_arg.?;
+    const bustype_string = bustype_arg.?;
     const bustype = std.meta.stringToEnum(goose.BusType, bustype_string).?;
 
     var conn = try goose.Connection.init(allocator, bustype);
