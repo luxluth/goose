@@ -9,16 +9,17 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len < 3) {
-        std.debug.print("Usage: {s} <dest> <path>\n", .{args[0]});
-        std.debug.print("Example: {s} org.freedesktop.DBus /org/freedesktop/DBus\n", .{args[0]});
+    if (args.len < 4) {
+        std.debug.print("Usage: {s} <dest> <path> <bustype>\n", .{args[0]});
+        std.debug.print("Example: {s} org.freedesktop.DBus /org/freedesktop/DBus Session\n", .{args[0]});
         return;
     }
 
     const dest = args[1];
     const path = args[2];
+    const bustype = std.meta.stringToEnum(goose.BusType, args[3]).?;
 
-    var conn = try goose.Connection.init(allocator, .Session);
+    var conn = try goose.Connection.init(allocator, bustype);
     defer conn.close();
 
     const dbus_proxy = goose.proxy.Proxy.init(&conn, @ptrCast(dest), @ptrCast(path), "org.freedesktop.DBus.Introspectable");
