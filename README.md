@@ -111,6 +111,57 @@ try conn.addMatch("type='signal',interface='dev.myinterface.test'");
 try conn.registerSignalHandler("dev.myinterface.test", "MySignal", onSignal, null);
 ```
 
+### Exporting an Object
+
+Define a struct to represent your D-Bus interface and register it on the connection.
+
+```zig
+const std = @import("std");
+const goose = @import("goose");
+
+// Define the Interface
+const MyInterface = struct {
+    conn: *goose.Connection,
+
+    // Properties (exposed via org.freedesktop.DBus.Properties)
+    Count: goose.Property(i32, .ReadWrite) = goose.property(i32, .ReadWrite, 0),
+
+    // Signals
+    Tick: goose.Signal(i32) = goose.signal("Tick", i32),
+
+    pub fn init(conn: *goose.Connection, _: void) @This() {
+        return .{ .conn = conn };
+    }
+
+    // Methods are automatically exported
+    pub fn Increment(self: *MyInterface) !i32 {
+        self.Count.value += 1;
+        // Trigger signal
+        try self.Tick.trigger(self.conn, self.Count.value);
+        return self.Count.value;
+    }
+};
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var conn = try goose.Connection.init(allocator, .Session);
+    defer conn.close();
+
+    // Register Object: (Interface Type, Bus Name, Object Path)
+    const handle = try conn.registerObject(
+        MyInterface,
+        "com.example.MyService",
+        "/com/example/MyObject"
+    );
+
+    // Serve requests
+    try conn.waitOnHandle(handle);
+}
+```
+
 ## Tools
 
 Goose includes helper tools for introspection and code generation.
@@ -132,7 +183,7 @@ b.installArtifact(goose_dep.artifact("goose-generate"));
 A tool to introspect a D-Bus object and output its XML definition.
 
 ```bash
-./zig-out/bin/goose-introspection <destination> <path>
+./zig-out/bin/goose-introspection <destination> <path> <bus_type>
 ```
 
 ### Proxy Generator
@@ -140,7 +191,7 @@ A tool to introspect a D-Bus object and output its XML definition.
 Generate type-safe Zig bindings from D-Bus introspection XML.
 
 ```bash
-./zig-out/bin/goose-generate <destination> <path>
+./zig-out/bin/goose-generate <destination> <path> <bus_type>
 ```
 
 ## License
