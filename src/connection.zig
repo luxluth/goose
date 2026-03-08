@@ -70,7 +70,8 @@ pub const Connection = struct {
     /// Initializes a new connection to the D-Bus bus.
     /// `bus_type`: The type of bus to connect to (.Session, .System, or .Accessibility).
     pub fn init(allocator: std.mem.Allocator, bus_type: BusType) !Connection {
-        var socket_path: []const u8 = undefined;
+        var socket_paths: SocketIterator = undefined;
+        var socket: net.Stream = undefined;
         var allocated_path: ?[]u8 = null;
         defer if (allocated_path) |p| allocator.free(p);
 
@@ -78,27 +79,32 @@ pub const Connection = struct {
             .Session => {
                 const bus_address = std.posix.getenv("DBUS_SESSION_BUS_ADDRESS") orelse
                     return error.EnvVarNotFound;
-                socket_path = try extractUnixSocketPath(bus_address);
+                socket_paths = .init(bus_address);
             },
             .System => {
                 if (std.posix.getenv("DBUS_SYSTEM_BUS_ADDRESS")) |addr| {
-                    socket_path = try extractUnixSocketPath(addr);
+                    socket_paths = .init(addr);
                 } else {
-                    socket_path = "/var/run/dbus/system_bus_socket";
+                    socket_paths = .init("unix:path=/var/run/dbus/system_bus_socket");
                 }
             },
             .Accessibility => {
                 if (std.posix.getenv("AT_SPI_BUS_ADDRESS")) |addr| {
-                    socket_path = try extractUnixSocketPath(addr);
+                    socket_paths = .init(addr);
                 } else {
                     const uid = std.posix.getuid();
-                    allocated_path = try std.fmt.allocPrint(allocator, "/run/user/{d}/at-spi/bus_0", .{uid});
-                    socket_path = allocated_path.?;
+                    allocated_path = try std.fmt.allocPrint(allocator, "unix:path=/run/user/{d}/at-spi/bus_0", .{uid});
+                    socket_paths = .init(allocated_path.?);
                 }
             },
         }
 
-        const socket = try net.connectUnixSocket(socket_path);
+        while (socket_paths.next()) |path| {
+            socket = net.connectUnixSocket(path) catch continue;
+            break;
+        } else {
+            return error.NoValidAddressFound;
+        }
 
         const reader_buf = try allocator.alloc(u8, 4096 * 10);
         errdefer allocator.free(reader_buf);
@@ -775,11 +781,28 @@ pub const Connection = struct {
     }
 };
 
-fn extractUnixSocketPath(address: []const u8) ![]const u8 {
-    // NOTE: system socket path = /var/run/dbus/system_bus_socket
-    const prefix = "unix:path=";
-    if (!std.mem.startsWith(u8, address, prefix)) {
-        return error.InvalidAddressFormat;
+const SocketIterator = struct {
+    inner: std.mem.TokenIterator(u8, .scalar),
+
+    fn init(address: []const u8) SocketIterator {
+        return .{ .inner = std.mem.tokenizeScalar(u8, address, ';') };
     }
-    return address[prefix.len..];
-}
+
+    fn next(self: *SocketIterator) ?[]const u8 {
+        const prefix = "unix:";
+        const param = "path=";
+
+        while (self.inner.next()) |token| {
+            if (!std.mem.startsWith(u8, token, prefix))
+                continue;
+
+            var params = std.mem.tokenizeScalar(u8, token[prefix.len..], ',');
+            while (params.next()) |pair| {
+                if (std.mem.startsWith(u8, pair, param))
+                    return pair[param.len..];
+            }
+        }
+
+        return null;
+    }
+};
