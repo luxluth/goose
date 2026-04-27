@@ -6,13 +6,12 @@ const Value = core.value.Value;
 pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, interface_name: []const u8) ![:0]const u8 {
     var out = try std.ArrayList(u8).initCapacity(allocator, 1024);
     errdefer out.deinit(allocator);
-    const w = out.writer(allocator);
 
-    try w.writeAll("<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"");
-    try w.writeAll(" \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n");
-    try w.writeAll("<node>\n");
+    try out.appendSlice(allocator, "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"");
+    try out.appendSlice(allocator, " \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n");
+    try out.appendSlice(allocator, "<node>\n");
 
-    try w.print("  <interface name=\"{s}\">\n", .{interface_name});
+    try out.print(allocator, "  <interface name=\"{s}\">\n", .{interface_name});
 
     // Methods
     inline for (@typeInfo(T).@"struct".decls) |decl| {
@@ -24,14 +23,14 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
                 const fn_info = @typeInfo(field_type).@"fn";
                 // Check if it looks like a method (first arg is *T)
                 if (fn_info.params.len > 0 and fn_info.params[0].type == *T) {
-                    try w.print("    <method name=\"{s}\">\n", .{decl.name});
+                    try out.print(allocator, "    <method name=\"{s}\">\n", .{decl.name});
 
                     // Args (skip first which is self)
                     inline for (fn_info.params[1..], 0..) |param, i| {
                         if (param.type) |PT| {
                             const sig = try getSignature(allocator, PT);
                             defer allocator.free(sig);
-                            try w.print("      <arg name=\"arg{d}\" type=\"{s}\" direction=\"in\"/>\n", .{ i, sig });
+                            try out.print(allocator, "      <arg name=\"arg{d}\" type=\"{s}\" direction=\"in\"/>\n", .{ i, sig });
                         }
                     }
 
@@ -45,10 +44,10 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
                     if (CleanRetT != void) {
                         const sig = try getSignature(allocator, CleanRetT);
                         defer allocator.free(sig);
-                        try w.print("      <arg name=\"ret\" type=\"{s}\" direction=\"out\"/>\n", .{sig});
+                        try out.print(allocator, "      <arg name=\"ret\" type=\"{s}\" direction=\"out\"/>\n", .{sig});
                     }
 
-                    try w.writeAll("    </method>\n");
+                    try out.appendSlice(allocator, "    </method>\n");
                 }
             }
         }
@@ -59,11 +58,11 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
         const FieldType = field.type;
         if (@typeInfo(FieldType) == .@"struct" and @hasDecl(FieldType, "__is_goose_signal")) {
             const PayloadT = FieldType.PayloadType;
-            try w.print("    <signal name=\"{s}\">\n", .{@field(field, "name")});
+            try out.print(allocator, "    <signal name=\"{s}\">\n", .{@field(field, "name")});
             const sig = try getSignature(allocator, PayloadT);
             defer allocator.free(sig);
-            try w.print("      <arg type=\"{s}\" />\n", .{sig});
-            try w.writeAll("    </signal>\n");
+            try out.print(allocator, "      <arg type=\"{s}\" />\n", .{sig});
+            try out.appendSlice(allocator, "    </signal>\n");
         }
     }
 
@@ -87,38 +86,38 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
 
         const sig = try getSignature(allocator, DataType);
         defer allocator.free(sig);
-        try w.print("    <property name=\"{s}\" type=\"{s}\" access=\"{s}\"/>\n", .{ field.name, sig, access });
+        try out.print(allocator, "    <property name=\"{s}\" type=\"{s}\" access=\"{s}\"/>\n", .{ field.name, sig, access });
     }
 
-    try w.writeAll("  </interface>\n");
-    try w.writeAll("  <interface name=\"org.freedesktop.DBus.Introspectable\">\n");
-    try w.writeAll("    <method name=\"Introspect\">\n");
-    try w.writeAll("      <arg name=\"xml_data\" type=\"s\" direction=\"out\"/>\n");
-    try w.writeAll("    </method>\n");
-    try w.writeAll("  </interface>\n");
+    try out.appendSlice(allocator, "  </interface>\n");
+    try out.appendSlice(allocator, "  <interface name=\"org.freedesktop.DBus.Introspectable\">\n");
+    try out.appendSlice(allocator, "    <method name=\"Introspect\">\n");
+    try out.appendSlice(allocator, "      <arg name=\"xml_data\" type=\"s\" direction=\"out\"/>\n");
+    try out.appendSlice(allocator, "    </method>\n");
+    try out.appendSlice(allocator, "  </interface>\n");
 
-    try w.writeAll("  <interface name=\"org.freedesktop.DBus.Properties\">\n");
-    try w.writeAll("    <method name=\"Get\">\n");
-    try w.writeAll("      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
-    try w.writeAll("      <arg name=\"property_name\" type=\"s\" direction=\"in\"/>\n");
-    try w.writeAll("      <arg name=\"value\" type=\"v\" direction=\"out\"/>\n");
-    try w.writeAll("    </method>\n");
-    try w.writeAll("    <method name=\"Set\">\n");
-    try w.writeAll("      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
-    try w.writeAll("      <arg name=\"property_name\" type=\"s\" direction=\"in\"/>\n");
-    try w.writeAll("      <arg name=\"value\" type=\"v\" direction=\"in\"/>\n");
-    try w.writeAll("    </method>\n");
-    try w.writeAll("    <method name=\"GetAll\">\n");
-    try w.writeAll("      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
-    try w.writeAll("      <arg name=\"props\" type=\"a{sv}\" direction=\"out\"/>\n");
-    try w.writeAll("    </method>\n");
-    try w.writeAll("    <signal name=\"PropertiesChanged\">\n");
-    try w.writeAll("      <arg name=\"interface_name\" type=\"s\"/>\n");
-    try w.writeAll("      <arg name=\"changed_properties\" type=\"a{sv}\"/>\n");
-    try w.writeAll("      <arg name=\"invalidated_properties\" type=\"as\"/>\n");
-    try w.writeAll("    </signal>\n");
-    try w.writeAll("  </interface>\n");
-    try w.writeAll("</node>\n");
+    try out.appendSlice(allocator, "  <interface name=\"org.freedesktop.DBus.Properties\">\n");
+    try out.appendSlice(allocator, "    <method name=\"Get\">\n");
+    try out.appendSlice(allocator, "      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
+    try out.appendSlice(allocator, "      <arg name=\"property_name\" type=\"s\" direction=\"in\"/>\n");
+    try out.appendSlice(allocator, "      <arg name=\"value\" type=\"v\" direction=\"out\"/>\n");
+    try out.appendSlice(allocator, "    </method>\n");
+    try out.appendSlice(allocator, "    <method name=\"Set\">\n");
+    try out.appendSlice(allocator, "      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
+    try out.appendSlice(allocator, "      <arg name=\"property_name\" type=\"s\" direction=\"in\"/>\n");
+    try out.appendSlice(allocator, "      <arg name=\"value\" type=\"v\" direction=\"in\"/>\n");
+    try out.appendSlice(allocator, "    </method>\n");
+    try out.appendSlice(allocator, "    <method name=\"GetAll\">\n");
+    try out.appendSlice(allocator, "      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
+    try out.appendSlice(allocator, "      <arg name=\"props\" type=\"a{sv}\" direction=\"out\"/>\n");
+    try out.appendSlice(allocator, "    </method>\n");
+    try out.appendSlice(allocator, "    <signal name=\"PropertiesChanged\">\n");
+    try out.appendSlice(allocator, "      <arg name=\"interface_name\" type=\"s\"/>\n");
+    try out.appendSlice(allocator, "      <arg name=\"changed_properties\" type=\"a{sv}\"/>\n");
+    try out.appendSlice(allocator, "      <arg name=\"invalidated_properties\" type=\"as\"/>\n");
+    try out.appendSlice(allocator, "    </signal>\n");
+    try out.appendSlice(allocator, "  </interface>\n");
+    try out.appendSlice(allocator, "</node>\n");
 
     return try out.toOwnedSliceSentinel(allocator, 0);
 }

@@ -3,12 +3,15 @@ const goose = @import("goose");
 const proxy = goose.proxy;
 const GStr = goose.core.value.GStr;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    var conn = try goose.Connection.init(allocator, .Session);
+    var conn = try goose.Connection.init(
+        allocator,
+        .Session,
+        init.io,
+        init.environ_map,
+    );
     defer conn.close();
 
     try conn.addMatch("type='signal',interface='dev.myinterface.test'");

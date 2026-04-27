@@ -61,7 +61,7 @@ pub fn dbusAlignOf(comptime T: type) usize {
             64 => 8,
             else => @compileError("Only f64 on D-Bus"),
         },
-        .@"struct" => |_| {
+        .@"struct" => {
             if (@hasDecl(T, "SIGNATURE")) {
                 const sig = T.SIGNATURE;
                 if (sig.len > 0 and sig[0] == 'a') return 4;
@@ -69,9 +69,9 @@ pub fn dbusAlignOf(comptime T: type) usize {
             }
             return 8; // struct/dict-entry container
         },
-        .@"union" => |_| 1, // 'v'
-        .array => |_| 4, // 'a'
-        .pointer => |_| 4, // 'a' (slice is encoded as array)
+        .@"union" => 1, // 'v'
+        .array => 4, // 'a'
+        .pointer => 4, // 'a' (slice is encoded as array)
         else => @compileError("Unsupported alignment type for D-Bus"),
     };
 }
@@ -430,7 +430,7 @@ pub const Value = struct {
     /// Only unions are accepted
     pub fn Variant(comptime T: type) type {
         switch (@typeInfo(T)) {
-            .@"union" => |_| {
+            .@"union" => {
                 return struct {
                     pub const SIGNATURE = "v";
                     inner: T,
@@ -741,7 +741,7 @@ pub const Serializer = struct {
                     try Value.Struct(T).new(data).ser(w);
                 }
             },
-            .@"union" => |_| {
+            .@"union" => {
                 try Value.Variant(T).new(data).ser(w);
             },
             else => return error.UnsupportedTypeForNow,

@@ -1,13 +1,11 @@
 const std = @import("std");
 const goose = @import("goose");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     if (args.len < 4) {
         const prog_name = std.fs.path.basename(args[0]);
@@ -25,7 +23,7 @@ pub fn main() !void {
     const path = args[2];
     const bustype = std.meta.stringToEnum(goose.BusType, args[3]).?;
 
-    var conn = try goose.Connection.init(allocator, bustype);
+    var conn = try goose.Connection.init(allocator, bustype, io, init.environ_map);
     defer conn.close();
 
     const dbus_proxy = goose.proxy.Proxy.init(&conn, @ptrCast(dest), @ptrCast(path), "org.freedesktop.DBus.Introspectable");
@@ -40,10 +38,5 @@ pub fn main() !void {
     const generated = try goose.generator.generate(allocator, node, dest, path);
     defer allocator.free(generated);
 
-    var stdout_buffer: [8192]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
-
-    try stdout.writeAll(generated);
-    try stdout.flush();
+    try std.Io.File.stdout().writeStreamingAll(init.io, generated);
 }

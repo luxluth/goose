@@ -4,13 +4,10 @@ const proxy = goose.proxy;
 const message = goose.message;
 const GStr = goose.core.value.GStr;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    var args = try std.process.argsWithAllocator(allocator);
-    defer args.deinit();
+    var args = try init.minimal.args.iterateAllocator(init.arena.allocator());
 
     const prog_path = args.next() orelse "introspector";
     const prog_name = std.fs.path.basename(prog_path);
@@ -35,7 +32,7 @@ pub fn main() !void {
     const bustype_string = bustype_arg.?;
     const bustype = std.meta.stringToEnum(goose.BusType, bustype_string).?;
 
-    var conn = try goose.Connection.init(allocator, bustype);
+    var conn = try goose.Connection.init(allocator, bustype, init.io, init.environ_map);
     defer conn.close();
 
     std.debug.print("Target: {s} {s}\n", .{ dest, path });

@@ -25,8 +25,11 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
 
             // PropUnion Generation
             const PropUnion = blk: {
-                comptime var fields: []const std.builtin.Type.UnionField = &.{};
-                comptime var enum_fields: []const std.builtin.Type.EnumField = &.{};
+                comptime var union_fields_name: []const [:0]const u8 = &.{};
+                comptime var union_fields_type: []const type = &.{};
+
+                comptime var enum_fields_value: []const u16 = &.{};
+                comptime var enum_fields_name: []const [:0]const u8 = &.{};
                 comptime var count: usize = 0;
 
                 const struct_info = @typeInfo(T).@"struct";
@@ -42,27 +45,27 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                     };
 
                     if (is_prop) {
-                        fields = fields ++ &[_]std.builtin.Type.UnionField{.{ .name = f.name, .type = DataType, .alignment = @alignOf(DataType) }};
-                        enum_fields = enum_fields ++ &[_]std.builtin.Type.EnumField{.{ .name = f.name, .value = count }};
+                        union_fields_name = union_fields_name ++ &[_][:0]const u8{f.name};
+                        union_fields_type = union_fields_type ++ &[_]type{DataType};
+                        enum_fields_name = enum_fields_name ++ &[_][:0]const u8{f.name};
+                        enum_fields_value = enum_fields_value ++ &[_]u16{count};
                         count += 1;
                     }
                 }
 
                 if (count == 0) break :blk union { _dummy: void };
 
-                const TagType = @Type(.{ .@"enum" = .{
-                    .tag_type = u16,
-                    .fields = enum_fields,
-                    .decls = &.{},
-                    .is_exhaustive = true,
-                } });
+                const c = count;
 
-                break :blk @Type(.{ .@"union" = .{
-                    .layout = .auto,
-                    .tag_type = TagType,
-                    .fields = fields,
-                    .decls = &.{},
-                } });
+                const TagType = @Enum(u16, .exhaustive, enum_fields_name[0..c], enum_fields_value[0..c]);
+
+                break :blk @Union(
+                    .auto,
+                    TagType,
+                    union_fields_name[0..c],
+                    union_fields_type[0..c],
+                    &@splat(.{}),
+                );
             };
 
             if (iface_name != null and std.mem.eql(u8, iface_name.?, "org.freedesktop.DBus.Properties")) {

@@ -1,5 +1,5 @@
 const std = @import("std");
-const net = std.net;
+const net = std.Io.net;
 const core = @import("core.zig");
 const message = @import("message_utils.zig");
 const common = @import("common.zig");
@@ -22,23 +22,24 @@ pub const BusType = enum {
 /// Represents a connection to a D-Bus bus (session or system).
 /// Manages message sending, receiving, and object registration.
 pub const Connection = struct {
+    io: std.Io,
     __inner_sock: net.Stream,
     __allocator: std.mem.Allocator,
     __reader_buf: []u8,
-    __reader: net.Stream.Reader,
+    __reader: std.Io.net.Stream.Reader,
     serial_counter: u32 = 1,
     pending_messages: std.ArrayList(core.Message),
     signal_handlers: std.ArrayList(common.SignalHandler),
     registered_interfaces: std.ArrayList(common.InterfaceWrapper),
 
-    fn auth(conn: *Connection) !void {
-        const reader: *std.io.Reader = conn.__reader.interface();
+    fn auth(self: *Connection) !void {
+        var io_reader = &self.__reader.interface;
 
         var writer_buffer: [2048]u8 = undefined;
-        var writer = conn.__inner_sock.writer(&writer_buffer);
+        var writer = self.__inner_sock.writer(self.io, &writer_buffer);
         var io_writer = &writer.interface;
 
-        const uid: u32 = std.posix.getuid();
+        const uid: u32 = std.os.linux.getuid();
         var uid_buf: [32]u8 = undefined;
         const uid_str = try std.fmt.bufPrint(&uid_buf, "{}", .{uid});
 
@@ -58,7 +59,7 @@ pub const Connection = struct {
         try io_writer.print("AUTH EXTERNAL {s}\r\n", .{hex});
         try io_writer.flush();
 
-        const response = try reader.takeDelimiterInclusive('\n');
+        const response = try io_reader.takeDelimiterInclusive('\n');
         if (!std.mem.startsWith(u8, response, "OK")) {
             return error.HandshakeFail;
         }
@@ -69,30 +70,32 @@ pub const Connection = struct {
 
     /// Initializes a new connection to the D-Bus bus.
     /// `bus_type`: The type of bus to connect to (.Session, .System, or .Accessibility).
-    pub fn init(allocator: std.mem.Allocator, bus_type: BusType) !Connection {
+    /// `io`: Mandatory [`std.Io`]
+    /// `vars`: Environment variables provided from the entry point
+    pub fn init(allocator: std.mem.Allocator, bus_type: BusType, io: std.Io, vars: *std.process.Environ.Map) !Connection {
         var socket_paths: SocketIterator = undefined;
-        var socket: net.Stream = undefined;
+        var unix_addr: net.UnixAddress = undefined;
         var allocated_path: ?[]u8 = null;
         defer if (allocated_path) |p| allocator.free(p);
 
         switch (bus_type) {
             .Session => {
-                const bus_address = std.posix.getenv("DBUS_SESSION_BUS_ADDRESS") orelse
+                const bus_address = vars.get("DBUS_SESSION_BUS_ADDRESS") orelse
                     return error.EnvVarNotFound;
                 socket_paths = .init(bus_address);
             },
             .System => {
-                if (std.posix.getenv("DBUS_SYSTEM_BUS_ADDRESS")) |addr| {
+                if (vars.get("DBUS_SYSTEM_BUS_ADDRESS")) |addr| {
                     socket_paths = .init(addr);
                 } else {
                     socket_paths = .init("unix:path=/var/run/dbus/system_bus_socket");
                 }
             },
             .Accessibility => {
-                if (std.posix.getenv("AT_SPI_BUS_ADDRESS")) |addr| {
+                if (vars.get("AT_SPI_BUS_ADDRESS")) |addr| {
                     socket_paths = .init(addr);
                 } else {
-                    const uid = std.posix.getuid();
+                    const uid = std.os.linux.getuid();
                     allocated_path = try std.fmt.allocPrint(allocator, "unix:path=/run/user/{d}/at-spi/bus_0", .{uid});
                     socket_paths = .init(allocated_path.?);
                 }
@@ -100,7 +103,7 @@ pub const Connection = struct {
         }
 
         while (socket_paths.next()) |path| {
-            socket = net.connectUnixSocket(path) catch continue;
+            unix_addr = net.UnixAddress.init(path) catch continue;
             break;
         } else {
             return error.NoValidAddressFound;
@@ -109,18 +112,20 @@ pub const Connection = struct {
         const reader_buf = try allocator.alloc(u8, 4096 * 10);
         errdefer allocator.free(reader_buf);
 
+        const socket = try unix_addr.connect(io);
+
         var conn = Connection{
             .__inner_sock = socket,
             .__allocator = allocator,
             .__reader_buf = reader_buf,
-            .__reader = socket.reader(reader_buf),
+            .io = io,
             .pending_messages = try std.ArrayList(core.Message).initCapacity(allocator, 10),
             .signal_handlers = try std.ArrayList(common.SignalHandler).initCapacity(allocator, 0),
             .registered_interfaces = try std.ArrayList(common.InterfaceWrapper).initCapacity(allocator, 0),
+            .__reader = socket.reader(io, reader_buf),
         };
 
-        try auth(&conn);
-
+        try conn.auth();
         try conn.sayHello();
 
         return conn;
@@ -168,7 +173,7 @@ pub const Connection = struct {
         self.registered_interfaces.deinit(self.__allocator);
 
         self.__allocator.free(self.__reader_buf);
-        self.__inner_sock.close();
+        self.__inner_sock.close(self.io);
     }
 
     const RequestNameFlags = enum(u32) {
@@ -219,6 +224,13 @@ pub const Connection = struct {
         defer bytes.deinit(self.__allocator);
         var response = try self.call(bytes.items, serial);
         defer self.freeMessage(&response);
+        if (response.header.message_type == .Error) {
+            for (response.header.header_fields) |f| {
+                if (f.code == .ErrorName) {
+                    std.debug.print("[goose] RequestName failed with ErrorName: {s}\n", .{f.value.ErrorName});
+                }
+            }
+        }
     }
 
     /// Sends a D-Bus message over the connection.
@@ -227,7 +239,7 @@ pub const Connection = struct {
         defer bytes.deinit(self.__allocator);
 
         var writer_buffer: [2048]u8 = undefined;
-        var writer = self.__inner_sock.writer(&writer_buffer);
+        var writer = self.__inner_sock.writer(self.io, &writer_buffer);
         var io_writer = &writer.interface;
 
         try io_writer.writeAll(bytes.items);
@@ -446,7 +458,7 @@ pub const Connection = struct {
                                             if (child_name.len > 0) {
                                                 if (seen_children.get(child_name) == null) {
                                                     try seen_children.put(child_name, {});
-                                                    try children_xml.writer(self.__allocator).print("  <node name=\"{s}\"/>\n", .{child_name});
+                                                    try children_xml.print(self.__allocator, "  <node name=\"{s}\"/>\n", .{child_name});
                                                 }
                                             }
                                         }
@@ -456,12 +468,11 @@ pub const Connection = struct {
                                 // Construct full XML
                                 var full_xml = try std.ArrayList(u8).initCapacity(self.__allocator, 1024);
                                 defer full_xml.deinit(self.__allocator);
-                                const xw = full_xml.writer(self.__allocator);
-                                try xw.writeAll("<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"");
-                                try xw.writeAll(" \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n");
-                                try xw.writeAll("<node>\n");
-                                try xw.writeAll(children_xml.items);
-                                try xw.writeAll("</node>\n");
+                                try full_xml.appendSlice(self.__allocator, "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"");
+                                try full_xml.appendSlice(self.__allocator, " \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n");
+                                try full_xml.appendSlice(self.__allocator, "<node>\n");
+                                try full_xml.appendSlice(self.__allocator, children_xml.items);
+                                try full_xml.appendSlice(self.__allocator, "</node>\n");
 
                                 // Send Reply
                                 const xml_slice = try full_xml.toOwnedSliceSentinel(self.__allocator, 0);
@@ -589,9 +600,8 @@ pub const Connection = struct {
     fn readNextMessage(self: *Connection) !core.Message {
         var header_buf: [16]u8 = undefined;
 
-        const reader: *std.io.Reader = self.__reader.interface();
-
-        try reader.readSliceAll(&header_buf);
+        var io_reader = &self.__reader.interface;
+        try io_reader.readSliceAll(&header_buf);
 
         const endian: std.builtin.Endian = switch (header_buf[0]) {
             'l' => .little,
@@ -607,19 +617,19 @@ pub const Connection = struct {
 
         const fields_bytes = try self.__allocator.alloc(u8, fields_len);
         defer self.__allocator.free(fields_bytes);
-        try reader.readSliceAll(fields_bytes);
+        try io_reader.readSliceAll(fields_bytes);
 
         // Align stream to 8 bytes
         const current_pos = 16 + fields_len;
         const padding = (8 - (current_pos % 8)) % 8;
         if (padding > 0) {
-            try reader.discardAll(padding);
+            try io_reader.discardAll(padding);
         }
 
         // Read body
         const body = try self.__allocator.alloc(u8, body_len);
         errdefer self.__allocator.free(body);
-        try reader.readSliceAll(body);
+        try io_reader.readSliceAll(body);
 
         // Parse fields
         var fields_list = try std.ArrayList(core.HeaderField).initCapacity(self.__allocator, 4);
@@ -633,7 +643,7 @@ pub const Connection = struct {
             fields_list.deinit(self.__allocator);
         }
 
-        var freader = std.io.Reader.fixed(fields_bytes);
+        var freader: std.Io.Reader = .fixed(fields_bytes);
 
         while (freader.seek < fields_len) {
             const padding_f = (8 - (freader.seek % 8)) % 8;
@@ -725,7 +735,7 @@ pub const Connection = struct {
 
     fn call(self: *Connection, data: []u8, serial: u32) !core.Message {
         var writer_buffer: [2048]u8 = undefined;
-        var writer = self.__inner_sock.writer(&writer_buffer);
+        var writer = self.__inner_sock.writer(self.io, &writer_buffer);
         var io_writer = &writer.interface;
 
         try io_writer.writeAll(data);
@@ -745,7 +755,6 @@ pub const Connection = struct {
             }
 
             // Read new message
-
             const msg = try self.readNextMessage();
 
             // Check if it is the reply

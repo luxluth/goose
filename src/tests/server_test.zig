@@ -25,14 +25,12 @@ const MyInterface = struct {
     }
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
     std.debug.print("Initializing connection...\n", .{});
-    // Note: This requires a running DBus session bus.
-    var conn = try Connection.init(allocator, .Session);
+    // NOTE: This requires a running DBus session bus.
+    var conn = try Connection.init(allocator, .Session, init.io, init.environ_map);
     defer conn.close();
 
     std.debug.print("Registering interface {s}...\n", .{MyInterface.INTERFACE_NAME});

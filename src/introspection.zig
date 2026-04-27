@@ -103,7 +103,7 @@ const Scanner = struct {
             }
             if (!is_closing and actual_content[actual_content.len - 1] == '/') {
                 is_self_closing = true;
-                actual_content = std.mem.trimRight(u8, actual_content[0 .. actual_content.len - 1], " \t\r\n");
+                actual_content = std.mem.trimEnd(u8, actual_content[0 .. actual_content.len - 1], " \t\r\n");
             }
 
             // Split name and attributes

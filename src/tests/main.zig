@@ -56,12 +56,10 @@ fn printData(data: []const u8) void {
 //     }
 // }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    var conn = try Connection.init(allocator, .Session);
+    var conn = try Connection.init(allocator, .Session, init.io, init.environ_map);
     defer conn.close();
 
     // Example 1: Call GetId (no args, returns string)
