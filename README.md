@@ -65,13 +65,12 @@ More examples of client and server usage can be found in the `src/tests/` direct
 const std = @import("std");
 const goose = @import("goose");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Connect to the session bus
-    var conn = try goose.Connection.init(allocator, .Session);
+    var conn = try goose.Connection.init(allocator, .Session, io, init.environ_map);
     defer conn.close();
 
     // ... use the connection
@@ -142,19 +141,19 @@ const MyInterface = struct {
     }
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
-    var conn = try goose.Connection.init(allocator, .Session);
+    var conn = try goose.Connection.init(allocator, .Session, io, init.environ_map);
     defer conn.close();
 
     // Register Object: (Interface Type, Bus Name, Object Path)
     const handle = try conn.registerObject(
         MyInterface,
         "com.example.MyService",
-        "/com/example/MyObject"
+        "/com/example/MyObject",
+        {}, // user data passed into the object init call
     );
 
     // Serve requests

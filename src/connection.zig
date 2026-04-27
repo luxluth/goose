@@ -250,7 +250,7 @@ pub const Connection = struct {
     /// The struct T must have an `init` method.
     /// `bus_name`: The well-known name to request on the bus.
     /// `path`: The object path to export this interface at.
-    pub fn registerObject(self: *Connection, comptime T: type, bus_name: [:0]const u8, path: [:0]const u8) !usize {
+    pub fn registerObject(self: *Connection, comptime T: type, bus_name: [:0]const u8, path: [:0]const u8, userData: anytype) !usize {
         try self.requestName(bus_name);
 
         const interface_name = if (@hasDecl(T, "INTERFACE_NAME")) T.INTERFACE_NAME else if (@hasDecl(T, "REQUESTED_NAME")) T.REQUESTED_NAME else bus_name;
@@ -258,8 +258,7 @@ pub const Connection = struct {
         // Instantiate
         var instance_ptr = try self.__allocator.create(T);
         // We assume init signature: fn init(conn: *Connection, userData: anytype) T
-        // For now, passing {} as userData.
-        instance_ptr.* = T.init(self, {});
+        instance_ptr.* = T.init(self, userData);
 
         // Bind signals
         // We iterate over fields. If a field is a Signal, we set its interface and path.

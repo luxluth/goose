@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
     defer conn.close();
 
     std.debug.print("Registering interface {s}...\n", .{MyInterface.INTERFACE_NAME});
-    const handle = try conn.registerObject(MyInterface, "dev.myinterface.test", "/dev/myinterface/test");
+    const handle = try conn.registerObject(MyInterface, "dev.myinterface.test", "/dev/myinterface/test", {});
 
     std.debug.print("Service registered. Handle: {d}\n", .{handle});
     std.debug.print("Ready to serve requests.\n", .{});
