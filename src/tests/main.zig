@@ -230,4 +230,107 @@ pub fn main(init: std.process.Init) !void {
         }
         allocator.free(paths);
     }
+
+    // Example 11: MPRIS Metadata Decoding Test
+    {
+        std.debug.print("\nExample 11: MPRIS Metadata Decoding Test\n", .{});
+
+        var reply = try conn.methodCall(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "ListNames",
+            null,
+            &.{},
+        );
+        defer conn.freeMessage(&reply);
+
+        var mpris_name: ?[:0]const u8 = null;
+        var decoder = message.BodyDecoder.fromMessage(allocator, reply);
+        const names = try decoder.decode([]const GStr);
+        defer allocator.free(names);
+
+        for (names) |name| {
+            if (std.mem.startsWith(u8, name.s, "org.mpris.MediaPlayer2.")) {
+                mpris_name = name.s;
+                break;
+            }
+        }
+
+        if (mpris_name) |name| {
+            std.debug.print("Found MPRIS service: {s}\n", .{name});
+
+            var encoder = try message.BodyEncoder.encode(allocator, GStr.new("org.mpris.MediaPlayer2.Player"));
+            defer encoder.deinit();
+
+            var prop_reply = conn.methodCall(
+                name,
+                "/org/mpris/MediaPlayer2",
+                "org.freedesktop.DBus.Properties",
+                "GetAll",
+                encoder.signature(),
+                encoder.body(),
+            ) catch |err| {
+                std.debug.print("Failed to get properties: {any}\n", .{err});
+                return;
+            };
+            defer conn.freeMessage(&prop_reply);
+
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const arena_alloc = arena.allocator();
+
+            var prop_decoder = message.BodyDecoder.fromMessage(arena_alloc, prop_reply);
+            const props = prop_decoder.decodeAlloc(std.StringHashMap(GVariant)) catch |err| {
+                std.debug.print("Failed to decode properties (was the bug triggered ?): {any}\n", .{err});
+                return;
+            };
+
+            if (props.get("Metadata")) |meta_var| {
+                if (meta_var == .dict) {
+                    std.debug.print("Successfully decoded MPRIS Metadata. Item count: {d}\n", .{meta_var.dict.count()});
+                    var it = meta_var.dict.iterator();
+                    while (it.next()) |entry| {
+                        std.debug.print("  - {s}: ", .{entry.key_ptr.*});
+                        const val = if (entry.value_ptr.* == .variant) entry.value_ptr.variant.* else entry.value_ptr.*;
+                        switch (val) {
+                            .string => |s| std.debug.print("\"{s}\"\n", .{s.s}),
+                            .object_path => |o| std.debug.print("path(\"{s}\")\n", .{o.s}),
+                            .int32 => |i| std.debug.print("{d}\n", .{i}),
+                            .uint32 => |u| std.debug.print("{d}\n", .{u}),
+                            .int64 => |i| std.debug.print("{d}\n", .{i}),
+                            .uint64 => |u| std.debug.print("{d}\n", .{u}),
+                            .double => |d| std.debug.print("{d}\n", .{d}),
+                            .boolean => |b| std.debug.print("{}\n", .{b}),
+                            .array => |arr| {
+                                std.debug.print("[", .{});
+                                for (arr, 0..) |item, i| {
+                                    if (i > 0) std.debug.print(", ", .{});
+                                    const inner = if (item == .variant) item.variant.* else item;
+                                    switch (inner) {
+                                        .string => |s_inner| std.debug.print("\"{s}\"", .{s_inner.s}),
+                                        .object_path => |o_inner| std.debug.print("path(\"{s}\")", .{o_inner.s}),
+                                        .int32 => |num| std.debug.print("{d}", .{num}),
+                                        .int64 => |num| std.debug.print("{d}", .{num}),
+                                        .double => |num| std.debug.print("{d}", .{num}),
+                                        else => std.debug.print("{s}", .{@tagName(inner)}),
+                                    }
+                                }
+                                std.debug.print("]\n", .{});
+                            },
+                            .dict => |d_map| std.debug.print("[dict of {d} items]\n", .{d_map.count()}),
+                            .variant => |v| std.debug.print("[variant containing {s}]\n", .{@tagName(v.*)}),
+                            else => |v| std.debug.print("[{s}]\n", .{@tagName(v)}),
+                        }
+                    }
+                } else {
+                    std.debug.print("Metadata property is not a dict. It is: {s}\n", .{@tagName(meta_var)});
+                }
+            } else {
+                std.debug.print("No Metadata property found in MPRIS player.\n", .{});
+            }
+        } else {
+            std.debug.print("No MPRIS service running. Skipping live metadata test.\n", .{});
+        }
+    }
 }
