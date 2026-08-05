@@ -410,6 +410,7 @@ pub const BodyDecoder = struct {
                 if (sig_pos.* >= sig.len) return error.SignatureEnd;
                 const is_dict = sig[sig_pos.*] == '{';
 
+                self.alignTo(dbusAlignOf(u32));
                 const byte_len = try self.readVal(u32, false);
 
                 if (is_dict) {
