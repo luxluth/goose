@@ -2,14 +2,46 @@ const std = @import("std");
 const core = @import("core.zig");
 const Value = core.value.Value;
 
+pub const xml_prelude =
+    \\<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+    \\ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+    \\<node>
+;
+// .. Introspection XML for actual interfaces gets sandwiched inbetween these two fragments ..
+pub const xml_postlude =
+    \\  <interface name="org.freedesktop.DBus.Introspectable">
+    \\    <method name="Introspect">
+    \\      <arg name="xml_data" type="s" direction="out"/>
+    \\    </method>
+    \\  </interface>
+    \\  <interface name="org.freedesktop.DBus.Properties">
+    \\    <method name="Get">
+    \\      <arg name="interface_name" type="s" direction="in"/>
+    \\      <arg name="property_name" type="s" direction="in"/>
+    \\      <arg name="value" type="v" direction="out"/>
+    \\    </method>
+    \\    <method name="Set">
+    \\      <arg name="interface_name" type="s" direction="in"/>
+    \\      <arg name="property_name" type="s" direction="in"/>
+    \\      <arg name="value" type="v" direction="in"/>
+    \\    </method>
+    \\    <method name="GetAll">
+    \\      <arg name="interface_name" type="s" direction="in"/>
+    \\      <arg name="props" type="a{sv}" direction="out"/>
+    \\    </method>
+    \\    <signal name="PropertiesChanged">
+    \\      <arg name="interface_name" type="s"/>
+    \\      <arg name="changed_properties" type="a{sv}"/>
+    \\      <arg name="invalidated_properties" type="as"/>
+    \\    </signal>
+    \\  </interface>
+    \\</node>
+;
+
 /// Generates a D-Bus introspection XML string for a Zig type T.
-pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, interface_name: []const u8) ![:0]const u8 {
+pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, interface_name: []const u8) ![]const u8 {
     var out = try std.ArrayList(u8).initCapacity(allocator, 1024);
     errdefer out.deinit(allocator);
-
-    try out.appendSlice(allocator, "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"");
-    try out.appendSlice(allocator, " \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n");
-    try out.appendSlice(allocator, "<node>\n");
 
     try out.print(allocator, "  <interface name=\"{s}\">\n", .{interface_name});
 
@@ -92,36 +124,8 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
     }
 
     try out.appendSlice(allocator, "  </interface>\n");
-    try out.appendSlice(allocator, "  <interface name=\"org.freedesktop.DBus.Introspectable\">\n");
-    try out.appendSlice(allocator, "    <method name=\"Introspect\">\n");
-    try out.appendSlice(allocator, "      <arg name=\"xml_data\" type=\"s\" direction=\"out\"/>\n");
-    try out.appendSlice(allocator, "    </method>\n");
-    try out.appendSlice(allocator, "  </interface>\n");
 
-    try out.appendSlice(allocator, "  <interface name=\"org.freedesktop.DBus.Properties\">\n");
-    try out.appendSlice(allocator, "    <method name=\"Get\">\n");
-    try out.appendSlice(allocator, "      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
-    try out.appendSlice(allocator, "      <arg name=\"property_name\" type=\"s\" direction=\"in\"/>\n");
-    try out.appendSlice(allocator, "      <arg name=\"value\" type=\"v\" direction=\"out\"/>\n");
-    try out.appendSlice(allocator, "    </method>\n");
-    try out.appendSlice(allocator, "    <method name=\"Set\">\n");
-    try out.appendSlice(allocator, "      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
-    try out.appendSlice(allocator, "      <arg name=\"property_name\" type=\"s\" direction=\"in\"/>\n");
-    try out.appendSlice(allocator, "      <arg name=\"value\" type=\"v\" direction=\"in\"/>\n");
-    try out.appendSlice(allocator, "    </method>\n");
-    try out.appendSlice(allocator, "    <method name=\"GetAll\">\n");
-    try out.appendSlice(allocator, "      <arg name=\"interface_name\" type=\"s\" direction=\"in\"/>\n");
-    try out.appendSlice(allocator, "      <arg name=\"props\" type=\"a{sv}\" direction=\"out\"/>\n");
-    try out.appendSlice(allocator, "    </method>\n");
-    try out.appendSlice(allocator, "    <signal name=\"PropertiesChanged\">\n");
-    try out.appendSlice(allocator, "      <arg name=\"interface_name\" type=\"s\"/>\n");
-    try out.appendSlice(allocator, "      <arg name=\"changed_properties\" type=\"a{sv}\"/>\n");
-    try out.appendSlice(allocator, "      <arg name=\"invalidated_properties\" type=\"as\"/>\n");
-    try out.appendSlice(allocator, "    </signal>\n");
-    try out.appendSlice(allocator, "  </interface>\n");
-    try out.appendSlice(allocator, "</node>\n");
-
-    return try out.toOwnedSliceSentinel(allocator, 0);
+    return try out.toOwnedSlice(allocator);
 }
 
 fn getSignature(allocator: std.mem.Allocator, comptime T: type) ![:0]const u8 {
