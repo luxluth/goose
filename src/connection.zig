@@ -7,6 +7,7 @@ const dispatcher = @import("dispatcher.zig");
 const xml_generator = @import("xml_generator.zig");
 const Value = core.value.Value;
 const GStr = core.value.GStr;
+const GVariant = core.value.GVariant;
 const DBusWriter = core.value.DBusWriter;
 
 /// Specifies the type of D-Bus connection.
@@ -395,25 +396,63 @@ pub const Connection = struct {
 
                 if (path) |p| {
                     var handled = false;
+                    var intro_interfaces: std.ArrayList(u8) = .empty;
+                    defer intro_interfaces.deinit(self.__allocator);
+
                     for (self.registered_interfaces.items) |*w| {
                         // Check path first
                         if (std.mem.eql(u8, w.path, p)) {
                             // Then check interface or Introspectable
                             if (iface) |i| {
-                                if (std.mem.eql(u8, w.interface_name, i) or
-                                    std.mem.eql(u8, i, "org.freedesktop.DBus.Introspectable") or
+                                if (std.mem.eql(u8, i, "org.freedesktop.DBus.Introspectable") and
+                                    member != null and std.mem.eql(u8, member.?, "Introspect"))
+                                {
+                                    // Introspection needs a little special handling, because there may be multiple
+                                    // interfaces implemented by the object, and we have to return all of them.
+
+                                    if (intro_interfaces.items.len == 0)
+                                        // Begin the XML if this is the first interface
+                                        try intro_interfaces.appendSlice(self.__allocator, xml_generator.xml_prelude);
+
+                                    try intro_interfaces.appendSlice(self.__allocator, w.intro_xml);
+                                } else if (std.mem.eql(u8, w.interface_name, i) or
                                     std.mem.eql(u8, i, "org.freedesktop.DBus.Properties"))
                                 {
                                     // Dispatch
-                                    try w.dispatch(w, self, msg);
-                                    handled = true;
+                                    const dispatch_result = try w.dispatch(w, self, msg);
+                                    handled = dispatch_result == .dispatched;
                                 }
                             } else {
                                 // Fallback dispatch
-                                try w.dispatch(w, self, msg);
-                                handled = true;
+                                const dispatch_result = try w.dispatch(w, self, msg);
+                                handled = dispatch_result == .dispatched;
                             }
                         }
+                    }
+
+                    // Handle static introspection
+                    if (intro_interfaces.items.len != 0) {
+                        // Wrap up the XML
+                        try intro_interfaces.appendSlice(self.__allocator, xml_generator.xml_postlude);
+                        const xml = try intro_interfaces.toOwnedSliceSentinel(self.__allocator, 0);
+
+                        var encoder = try message.BodyEncoder.encode(self.__allocator, GStr.new(xml));
+                        defer encoder.deinit();
+                        try self.sendReply(msg, encoder);
+                        handled = true;
+                    }
+
+                    // Handle GetAll when no interfaces match
+                    if (!handled and
+                        iface != null and std.mem.eql(u8, iface.?, "org.freedesktop.DBus.Properties") and
+                        member != null and std.mem.eql(u8, member.?, "GetAll"))
+                    {
+                        var dict = std.StringHashMap(GVariant).init(self.__allocator);
+                        defer dict.deinit();
+                        var encoder = try message.BodyEncoder.encode(self.__allocator, dict);
+                        defer encoder.deinit();
+                        try self.sendReply(msg, encoder);
+                        handled = true;
                     }
 
                     // Dynamic Introspection logic
