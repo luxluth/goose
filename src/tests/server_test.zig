@@ -34,11 +34,10 @@ pub fn main(init: std.process.Init) !void {
     defer conn.close();
 
     std.debug.print("Registering interface {s}...\n", .{MyInterface.INTERFACE_NAME});
-    const handle = try conn.registerObject(MyInterface, "dev.myinterface.test", "/dev/myinterface/test", {});
+    try conn.registerObject(MyInterface, "dev.myinterface.test", "/dev/myinterface/test", {});
 
-    std.debug.print("Service registered. Handle: {d}\n", .{handle});
-    std.debug.print("Ready to serve requests.\n", .{});
+    std.debug.print("Service registered. Ready to serve requests.\n", .{});
 
     // Uncomment to run loop:
-    try conn.waitOnHandle(handle);
+    try conn.serve();
 }

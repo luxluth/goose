@@ -315,7 +315,7 @@ pub const Connection = struct {
     /// The struct T must have an `init` method.
     /// `bus_name`: The well-known name to request on the bus.
     /// `path`: The object path to export this interface at.
-    pub fn registerObject(self: *Connection, comptime T: type, bus_name: [:0]const u8, path: [:0]const u8, userData: anytype) !usize {
+    pub fn registerObject(self: *Connection, comptime T: type, bus_name: [:0]const u8, path: [:0]const u8, userData: anytype) !void {
         try self.requestName(bus_name);
 
         const interface_name = if (@hasDecl(T, "INTERFACE_NAME")) T.INTERFACE_NAME else if (@hasDecl(T, "REQUESTED_NAME")) T.REQUESTED_NAME else bus_name;
@@ -356,7 +356,6 @@ pub const Connection = struct {
         };
 
         try self.registered_interfaces.append(self.__allocator, wrapper);
-        return self.registered_interfaces.items.len - 1;
     }
 
     /// Sends a reply to a method call.
@@ -440,9 +439,7 @@ pub const Connection = struct {
     }
 
     /// Runs the main loop, sleeping securely while background thread handles messages.
-    pub fn waitOnHandle(self: *Connection, handle: usize) !void {
-        if (handle >= self.registered_interfaces.items.len) return error.InvalidHandle;
-
+    pub fn serve(self: *Connection) !void {
         if (self.is_initialized and self.worker_thread == null) {
             self.is_running.store(true, .release);
             self.worker_thread = try std.Thread.spawn(.{}, workerLoop, .{self});
