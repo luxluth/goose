@@ -155,7 +155,7 @@ pub fn main(init: std.process.Init) !void {
     defer conn.close();
 
     // Register Object: (Interface Type, Bus Name, Object Path)
-    const handle = try conn.registerObject(
+    try conn.registerObject(
         MyInterface,
         "com.example.MyService",
         "/com/example/MyObject",
@@ -163,7 +163,7 @@ pub fn main(init: std.process.Init) !void {
     );
 
     // Serve requests
-    try conn.waitOnHandle(handle);
+    try conn.serve();
 }
 ```
 
