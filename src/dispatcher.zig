@@ -6,10 +6,11 @@ const Connection = @import("connection.zig").Connection;
 const Value = core.value.Value;
 const GStr = core.value.GStr;
 const dbusAlignOf = core.value.dbusAlignOf;
+const DispatchResult = common.InterfaceWrapper.DispatchResult;
 
-pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Connection, core.Message) anyerror!void {
+pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Connection, core.Message) anyerror!DispatchResult {
     return struct {
-        fn dispatch(w: *const common.InterfaceWrapper, conn: *Connection, msg: core.Message) anyerror!void {
+        fn dispatch(w: *const common.InterfaceWrapper, conn: *Connection, msg: core.Message) anyerror!DispatchResult {
             const self_obj = @as(*T, @ptrCast(@alignCast(w.instance)));
 
             var member_name: ?[]const u8 = null;
@@ -21,7 +22,7 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                     else => {},
                 }
             }
-            const member = member_name orelse return;
+            const member = member_name orelse return .unhandled;
 
             // PropUnion Generation
             const PropUnion = blk: {
@@ -73,7 +74,7 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                     var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
                     const requested_iface = decoder.decode(GStr) catch {
                         try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid interface argument");
-                        return;
+                        return .dispatched;
                     };
                     if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
                         const VariantType = Value.Variant(PropUnion);
@@ -103,24 +104,20 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                         var encoder = try message.BodyEncoder.encode(conn.__allocator, dict);
                         defer encoder.deinit();
                         try conn.sendReply(msg, encoder);
+
+                        return .dispatched; // to this interface
                     } else {
-                        const VariantType = Value.Variant(PropUnion);
-                        var dict = std.StringHashMap(VariantType).init(conn.__allocator);
-                        defer dict.deinit();
-                        var encoder = try message.BodyEncoder.encode(conn.__allocator, dict);
-                        defer encoder.deinit();
-                        try conn.sendReply(msg, encoder);
+                        return .unhandled; // not this interface
                     }
-                    return;
                 } else if (std.mem.eql(u8, member, "Get")) {
                     var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
                     const requested_iface = decoder.decode(GStr) catch {
                         try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid interface argument");
-                        return;
+                        return .dispatched;
                     };
                     const prop_name = decoder.decode(GStr) catch {
                         try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid property name argument");
-                        return;
+                        return .dispatched;
                     };
 
                     if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
@@ -158,21 +155,24 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                             defer encoder.deinit();
                             try conn.sendReply(msg, encoder);
                         }
+
+                        return .dispatched; // to this interface
                     }
-                    return;
+
+                    return .unhandled; // not this interface
                 } else if (std.mem.eql(u8, member, "Set")) {
                     var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
                     const requested_iface = decoder.decode(GStr) catch {
                         try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid interface argument");
-                        return;
+                        return .dispatched;
                     };
                     const prop_name = decoder.decode(GStr) catch {
                         try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid property name argument");
-                        return;
+                        return .dispatched;
                     };
                     const val_union = decoder.decode(PropUnion) catch {
                         try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidSignature", "Property value signature mismatch");
-                        return;
+                        return .dispatched;
                     };
 
                     if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
@@ -246,19 +246,11 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                             defer encoder.deinit();
                             try conn.sendReply(msg, encoder);
                         }
-                    }
-                    return;
-                }
-            }
 
-            // Handle Introspect
-            if (iface_name) |iface| {
-                if (std.mem.eql(u8, iface, "org.freedesktop.DBus.Introspectable") and std.mem.eql(u8, member, "Introspect")) {
-                    // Return XML
-                    var encoder = try message.BodyEncoder.encode(conn.__allocator, GStr.new(w.intro_xml));
-                    defer encoder.deinit();
-                    try conn.sendReply(msg, encoder);
-                    return;
+                        return .dispatched; // to this interface
+                    }
+
+                    return .unhandled; // not this interface
                 }
             }
 
@@ -285,12 +277,14 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                                 var encoder = try message.BodyEncoder.encode(conn.__allocator, result);
                                 defer encoder.deinit();
                                 try conn.sendReply(msg, encoder);
-                                return;
+                                return .dispatched;
                             }
                         }
                     }
                 }
             }
+
+            return .unhandled;
         }
     }.dispatch;
 }

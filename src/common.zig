@@ -12,10 +12,12 @@ pub const SignalHandler = struct {
 };
 
 pub const InterfaceWrapper = struct {
+    pub const DispatchResult = enum { unhandled, dispatched };
+
     instance: *anyopaque,
-    dispatch: *const fn (wrapper: *const InterfaceWrapper, conn: *Connection, msg: core.Message) anyerror!void,
+    dispatch: *const fn (wrapper: *const InterfaceWrapper, conn: *Connection, msg: core.Message) anyerror!DispatchResult,
     destroy: *const fn (wrapper: *const InterfaceWrapper, allocator: std.mem.Allocator) void,
     interface_name: [:0]const u8,
     path: [:0]const u8,
-    intro_xml: [:0]const u8,
+    intro_xml: []const u8,
 };
