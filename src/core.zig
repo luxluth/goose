@@ -249,7 +249,7 @@ pub const MessageHeader = struct {
         };
         try Value.Byte().new(order_char).ser(&w);
 
-        try Byte.new(@intFromEnum(self.message_type)).ser(&w);
+        try Byte.new(@backingInt(self.message_type)).ser(&w);
         try Byte.new(self.flags).ser(&w);
         try Byte.new(self.proto_version).ser(&w);
 
@@ -268,7 +268,7 @@ pub const MessageHeader = struct {
         //   field[1]: VARIANT (1-aligned) => write 'g' + payload
         for (self.header_fields) |hf| {
             try w.padTo(8);
-            try Value.Byte().new(@intFromEnum(hf.code)).ser(&w);
+            try Value.Byte().new(@backingInt(hf.code)).ser(&w);
             try serHeaderFieldVariant(hf.value, &w);
         }
 

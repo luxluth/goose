@@ -290,11 +290,11 @@ pub const BodyDecoder = struct {
 
                 // Generic struct/tuple/dict-entry support
                 // DBus aligns structs and dict-entries to 8.
-                const is_dict_entry = info.fields.len == 2 and (std.mem.eql(u8, info.fields[0].name, "key") and std.mem.eql(u8, info.fields[1].name, "value"));
+                const is_dict_entry = info.field_names.len == 2 and (std.mem.eql(u8, info.field_names[0], "key") and std.mem.eql(u8, info.field_names[1], "value"));
                 var result: T = undefined;
-                inline for (info.fields) |fld| {
-                    self.alignTo(dbusAlignOf(fld.type));
-                    if (is_dict_entry and (fld.type == []const u8 or fld.type == [:0]const u8 or fld.type == []u8 or fld.type == [:0]u8) and std.mem.eql(u8, fld.name, "key")) {
+                inline for (info.field_names, info.field_types) |fld_name, fld_type| {
+                    self.alignTo(dbusAlignOf(fld_type));
+                    if (is_dict_entry and (fld_type == []const u8 or fld_type == [:0]const u8 or fld_type == []u8 or fld_type == [:0]u8) and std.mem.eql(u8, fld_name, "key")) {
                         if (self.pos + 4 > self.body.len) return error.EndOfBody;
                         const len = std.mem.readInt(u32, self.body[self.pos..][0..4], self.endian);
                         self.pos += 4;
@@ -305,12 +305,12 @@ pub const BodyDecoder = struct {
                         if (deep_copy) {
                             const new_s = try self.allocator.allocSentinel(u8, s.len, 0);
                             @memcpy(new_s, s);
-                            @field(result, fld.name) = new_s;
+                            @field(result, fld_name) = new_s;
                         } else {
-                            @field(result, fld.name) = s;
+                            @field(result, fld_name) = s;
                         }
                     } else {
-                        @field(result, fld.name) = try self.readVal(fld.type, deep_copy);
+                        @field(result, fld_name) = try self.readVal(fld_type, deep_copy);
                     }
                 }
                 return result;
@@ -347,14 +347,14 @@ pub const BodyDecoder = struct {
                     return try self.readDynamicVariant(inner_sig, deep_copy);
                 }
 
-                inline for (info.fields) |fld| {
-                    const fld_sig_len = Value.reprLength(fld.type);
+                inline for (info.field_names, info.field_types) |fld_name, fld_type| {
+                    const fld_sig_len = Value.reprLength(fld_type);
                     var fld_sig_buf: [256]u8 = undefined;
-                    Value.getRepr(fld.type, fld_sig_len, 0, fld_sig_buf[0..fld_sig_len]);
+                    Value.getRepr(fld_type, fld_sig_len, 0, fld_sig_buf[0..fld_sig_len]);
 
                     if (std.mem.eql(u8, inner_sig, fld_sig_buf[0..fld_sig_len])) {
-                        self.alignTo(dbusAlignOf(fld.type));
-                        return @unionInit(T, fld.name, try self.readVal(fld.type, deep_copy));
+                        self.alignTo(dbusAlignOf(fld_type));
+                        return @unionInit(T, fld_name, try self.readVal(fld_type, deep_copy));
                     }
                 }
                 return error.NoMatchingUnionField;

@@ -31,9 +31,7 @@ pub fn build(b: *std.Build) void {
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     const run_step = b.step("test-app", "Run the test app");
     run_step.dependOn(&run_cmd.step);
@@ -52,9 +50,7 @@ pub fn build(b: *std.Build) void {
 
     const run_plgd_cmd = b.addRunArtifact(playground_exe);
     run_plgd_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_plgd_cmd.addArgs(args);
-    }
+    run_plgd_cmd.addPassthruArgs();
 
     const run_plgd_step = b.step("playground", "Run the playground test file");
     run_plgd_step.dependOn(&run_plgd_cmd.step);
@@ -72,9 +68,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_server = b.addRunArtifact(server_exe);
-    if (b.args) |args| {
-        run_server.addArgs(args);
-    }
+    run_server.addPassthruArgs();
     const server_step = b.step("test-server", "Run the server test app");
     server_step.dependOn(&run_server.step);
 
@@ -91,9 +85,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_client = b.addRunArtifact(client_exe);
-    if (b.args) |args| {
-        run_client.addArgs(args);
-    }
+    run_client.addPassthruArgs();
     const client_step = b.step("test-client", "Run the client test app");
     client_step.dependOn(&run_client.step);
 
@@ -110,9 +102,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_concurrency = b.addRunArtifact(concurrency_exe);
-    if (b.args) |args| {
-        run_concurrency.addArgs(args);
-    }
+    run_concurrency.addPassthruArgs();
     const concurrency_step = b.step("test-concurrency", "Run concurrency and lifecycle tests");
     concurrency_step.dependOn(&run_concurrency.step);
 
@@ -129,9 +119,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const run_fd = b.addRunArtifact(fd_exe);
-    if (b.args) |args| {
-        run_fd.addArgs(args);
-    }
+    run_fd.addPassthruArgs();
     const fd_step = b.step("test-fd", "Run UNIX file descriptor passing tests");
     fd_step.dependOn(&run_fd.step);
 
@@ -148,9 +136,7 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(intro_exe);
     const run_intro = b.addRunArtifact(intro_exe);
-    if (b.args) |args| {
-        run_intro.addArgs(args);
-    }
+    run_intro.addPassthruArgs();
     const intro_step = b.step("introspection", "Run the introspection demo");
     intro_step.dependOn(&run_intro.step);
 
@@ -168,9 +154,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(gen_exe);
 
     const run_gen = b.addRunArtifact(gen_exe);
-    if (b.args) |args| {
-        run_gen.addArgs(args);
-    }
+    run_gen.addPassthruArgs();
     const gen_step = b.step("generate", "Generate Zig proxy from D-Bus introspection");
     gen_step.dependOn(&run_gen.step);
 

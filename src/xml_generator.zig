@@ -47,21 +47,21 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
     try out.print(allocator, "  <interface name=\"{s}\">\n", .{interface_name});
 
     // Methods
-    inline for (@typeInfo(T).@"struct".decls) |decl| {
-        const field_val = @field(T, decl.name);
+    inline for (@typeInfo(T).@"struct".decl_names) |decl_name| {
+        const field_val = @field(T, decl_name);
         const field_type = @TypeOf(field_val);
 
         if (@typeInfo(field_type) == .@"fn") {
-            if (!std.mem.eql(u8, decl.name, "init")) {
+            if (!std.mem.eql(u8, decl_name, "init")) {
                 const fn_info = @typeInfo(field_type).@"fn";
                 // Check if it looks like a method (first arg is *T)
-                if (fn_info.params.len > 0 and fn_info.params[0].type == *T) {
-                    try out.print(allocator, "    <method name=\"{s}\">\n", .{decl.name});
+                if (fn_info.param_types.len > 0 and fn_info.param_types[0] == *T) {
+                    try out.print(allocator, "    <method name=\"{s}\">\n", .{decl_name});
 
                     // Args (skip first which is self)
-                    inline for (fn_info.params[1..], 0..) |param, i| {
-                        if (param.type) |PT| {
-                            if (PT == core.Message or PT == *const core.Message or PT == *core.Message or PT == *Connection) continue;
+                    inline for (fn_info.param_types[1..], 0..) |param_type, i| {
+                        if (param_type) |PT| {
+                            if (PT == core.Message or PT == *Connection) continue;
                             const sig = try getSignature(allocator, PT);
                             defer allocator.free(sig);
                             try out.print(allocator, "      <arg name=\"arg{d}\" type=\"{s}\" direction=\"in\"/>\n", .{ i, sig });
@@ -88,11 +88,12 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
     }
 
     // Signals
-    inline for (std.meta.fields(T)) |field| {
-        const FieldType = field.type;
+    const typeinfo = @typeInfo(T).@"struct";
+    inline for (typeinfo.field_names, typeinfo.field_types) |field_name, field_type| {
+        const FieldType = field_type;
         if (@typeInfo(FieldType) == .@"struct" and @hasDecl(FieldType, "__is_goose_signal")) {
             const PayloadT = FieldType.PayloadType;
-            try out.print(allocator, "    <signal name=\"{s}\">\n", .{@field(field, "name")});
+            try out.print(allocator, "    <signal name=\"{s}\">\n", .{field_name});
             if (PayloadT != void) {
                 const sig = try getSignature(allocator, PayloadT);
                 defer allocator.free(sig);
@@ -103,13 +104,13 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
     }
 
     // Properties
-    inline for (std.meta.fields(T)) |field| {
-        const FieldType = field.type;
+    inline for (typeinfo.field_names, typeinfo.field_types) |field_name, field_type| {
+        const FieldType = field_type;
         const type_info = @typeInfo(FieldType);
 
         // Skip signals and connection
         if (type_info == .@"struct" and @hasDecl(FieldType, "__is_goose_signal")) continue;
-        if (comptime std.mem.eql(u8, field.name, "conn")) continue;
+        if (comptime std.mem.eql(u8, field_name, "conn")) continue;
         if (type_info == .pointer and type_info.pointer.size != .slice) continue; // Skip unsupported pointers
 
         const is_wrapped = type_info == .@"struct" and @hasDecl(FieldType, "__is_goose_property");
@@ -122,7 +123,7 @@ pub fn generateIntrospectionXml(allocator: std.mem.Allocator, comptime T: type, 
 
         const sig = try getSignature(allocator, DataType);
         defer allocator.free(sig);
-        try out.print(allocator, "    <property name=\"{s}\" type=\"{s}\" access=\"{s}\"/>\n", .{ field.name, sig, access });
+        try out.print(allocator, "    <property name=\"{s}\" type=\"{s}\" access=\"{s}\"/>\n", .{ field_name, sig, access });
     }
 
     try out.appendSlice(allocator, "  </interface>\n");
@@ -135,5 +136,5 @@ fn getSignature(allocator: std.mem.Allocator, comptime T: type) ![:0]const u8 {
     var sig_buf: [256]u8 = undefined;
     if (len > 256) return error.SignatureTooLong;
     Value.getRepr(T, len, 0, sig_buf[0..len]);
-    return try allocator.dupeZ(u8, sig_buf[0..len]);
+    return try allocator.dupeSentinel(u8, sig_buf[0..len], 0);
 }

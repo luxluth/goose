@@ -34,21 +34,21 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                 comptime var count: usize = 0;
 
                 const struct_info = @typeInfo(T).@"struct";
-                inline for (struct_info.fields) |f| {
-                    const FType = f.type;
+                inline for (struct_info.field_names, struct_info.field_types) |f_name, f_type| {
+                    const FType = f_type;
                     const type_info = @typeInfo(FType);
                     const DataType = if (type_info == .@"struct" and @hasDecl(FType, "__is_goose_property")) FType.DataType else FType;
                     const is_prop = if (type_info == .@"struct" and @hasDecl(FType, "__is_goose_property")) true else pblk: {
                         const is_signal = (type_info == .@"struct" and @hasDecl(FType, "__is_goose_signal"));
-                        const is_conn = std.mem.eql(u8, f.name, "conn");
+                        const is_conn = std.mem.eql(u8, f_name, "conn");
                         const is_ptr = (type_info == .pointer and type_info.pointer.size != .slice);
                         break :pblk !is_signal and !is_conn and !is_ptr;
                     };
 
                     if (is_prop) {
-                        union_fields_name = union_fields_name ++ &[_][:0]const u8{f.name};
+                        union_fields_name = union_fields_name ++ &[_][:0]const u8{f_name};
                         union_fields_type = union_fields_type ++ &[_]type{DataType};
-                        enum_fields_name = enum_fields_name ++ &[_][:0]const u8{f.name};
+                        enum_fields_name = enum_fields_name ++ &[_][:0]const u8{f_name};
                         enum_fields_value = enum_fields_value ++ &[_]u16{count};
                         count += 1;
                     }
@@ -82,22 +82,22 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                         defer dict.deinit();
 
                         const struct_info = @typeInfo(T).@"struct";
-                        inline for (struct_info.fields) |f| {
-                            const FType = f.type;
+                        inline for (struct_info.field_names, struct_info.field_types) |f_name, f_type| {
+                            const FType = f_type;
                             const type_info = @typeInfo(FType);
                             const is_wrapped = type_info == .@"struct" and @hasDecl(FType, "__is_goose_property");
                             const is_prop = is_wrapped or blk: {
                                 const is_signal = (type_info == .@"struct" and @hasDecl(FType, "__is_goose_signal"));
-                                const is_conn = f.type == *Connection; //std.mem.eql(u8, f.name, "conn");
+                                const is_conn = f_type == *Connection; //std.mem.eql(u8, f.name, "conn");
                                 const is_ptr = (type_info == .pointer and type_info.pointer.size != .slice);
                                 break :blk !is_signal and !is_conn and !is_ptr;
                             };
                             const readable = if (is_wrapped) FType.AccessMode != .Write else true;
 
                             if (is_prop and readable) {
-                                const val_field = @field(self_obj, f.name);
+                                const val_field = @field(self_obj, f_name);
                                 const val = if (is_wrapped) val_field.value else val_field;
-                                try dict.put(f.name, VariantType.new(@unionInit(PropUnion, f.name, val)));
+                                try dict.put(f_name, VariantType.new(@unionInit(PropUnion, f_name, val)));
                             }
                         }
 
@@ -126,14 +126,14 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                         var val_variant: VariantType = undefined;
 
                         const struct_info = @typeInfo(T).@"struct";
-                        inline for (struct_info.fields) |f| {
-                            if (!found and std.mem.eql(u8, f.name, prop_name.s)) {
-                                const FType = f.type;
+                        inline for (struct_info.field_names, struct_info.field_types) |f_name, f_type| {
+                            if (!found and std.mem.eql(u8, f_name, prop_name.s)) {
+                                const FType = f_type;
                                 const type_info = @typeInfo(FType);
                                 const is_wrapped = type_info == .@"struct" and @hasDecl(FType, "__is_goose_property");
                                 const is_prop = is_wrapped or blk: {
                                     const is_signal = (type_info == .@"struct" and @hasDecl(FType, "__is_goose_signal"));
-                                    const is_conn = std.mem.eql(u8, f.name, "conn");
+                                    const is_conn = std.mem.eql(u8, f_name, "conn");
                                     const is_ptr = (type_info == .pointer and type_info.pointer.size != .slice);
                                     break :blk !is_signal and !is_conn and !is_ptr;
                                 };
@@ -141,9 +141,9 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
 
                                 if (is_prop) {
                                     if (readable) {
-                                        const val_field = @field(self_obj, f.name);
+                                        const val_field = @field(self_obj, f_name);
                                         const val = if (is_wrapped) val_field.value else val_field;
-                                        val_variant = VariantType.new(@unionInit(PropUnion, f.name, val));
+                                        val_variant = VariantType.new(@unionInit(PropUnion, f_name, val));
                                         found = true;
                                     }
                                 }
@@ -178,14 +178,14 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                     if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
                         var found = false;
                         const struct_info = @typeInfo(T).@"struct";
-                        inline for (struct_info.fields) |f| {
-                            if (!found and std.mem.eql(u8, f.name, prop_name.s)) {
-                                const FType = f.type;
+                        inline for (struct_info.field_names, struct_info.field_types) |f_name, f_type| {
+                            if (!found and std.mem.eql(u8, f_name, prop_name.s)) {
+                                const FType = f_type;
                                 const type_info = @typeInfo(FType);
                                 const is_wrapped = type_info == .@"struct" and @hasDecl(FType, "__is_goose_property");
                                 const is_prop = is_wrapped or blk: {
                                     const is_signal = (type_info == .@"struct" and @hasDecl(FType, "__is_goose_signal"));
-                                    const is_conn = std.mem.eql(u8, f.name, "conn");
+                                    const is_conn = std.mem.eql(u8, f_name, "conn");
                                     const is_ptr = (type_info == .pointer and type_info.pointer.size != .slice);
                                     break :blk !is_signal and !is_conn and !is_ptr;
                                 };
@@ -193,12 +193,12 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
 
                                 if (is_prop) {
                                     if (writable) {
-                                        if (std.meta.activeTag(val_union) == std.meta.stringToEnum(std.meta.Tag(PropUnion), f.name)) {
-                                            const new_val = @field(val_union, f.name);
+                                        if (std.meta.activeTag(val_union) == std.meta.stringToEnum(std.meta.Tag(PropUnion), f_name)) {
+                                            const new_val = @field(val_union, f_name);
                                             if (is_wrapped) {
-                                                @field(self_obj, f.name).value = new_val;
+                                                @field(self_obj, f_name).value = new_val;
                                             } else {
-                                                @field(self_obj, f.name) = new_val;
+                                                @field(self_obj, f_name) = new_val;
                                             }
                                             found = true;
 
@@ -208,7 +208,7 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                                                 var dict = std.StringHashMap(VariantType).init(conn.__allocator);
                                                 defer dict.deinit();
 
-                                                try dict.put(f.name, VariantType.new(@unionInit(PropUnion, f.name, new_val)));
+                                                try dict.put(f_name, VariantType.new(@unionInit(PropUnion, f_name, new_val)));
 
                                                 const empty_strs = [_]GStr{};
                                                 const args = .{ GStr.new(w.interface_name), dict, Value.Array(GStr).new(&empty_strs) };
@@ -253,15 +253,15 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
             }
 
             // Dispatch to method
-            inline for (@typeInfo(T).@"struct".decls) |decl| {
-                const field_val = @field(T, decl.name);
+            inline for (@typeInfo(T).@"struct".decl_names) |decl_name| {
+                const field_val = @field(T, decl_name);
                 const field_type = @TypeOf(field_val);
 
                 if (@typeInfo(field_type) == .@"fn") {
-                    if (!std.mem.eql(u8, decl.name, "init")) {
+                    if (!std.mem.eql(u8, decl_name, "init")) {
                         const fn_info = @typeInfo(field_type).@"fn";
-                        if (fn_info.params.len > 0 and fn_info.params[0].type == *T) {
-                            if (std.mem.eql(u8, member, decl.name)) {
+                        if (fn_info.param_types.len > 0 and fn_info.param_types[0] == *T) {
+                            if (std.mem.eql(u8, member, decl_name)) {
                                 var decoder = message.BodyDecoder.fromMessage(conn.__allocator, msg);
                                 const ArgsType = std.meta.ArgsTuple(field_type);
                                 var args: ArgsType = undefined;
@@ -269,8 +269,8 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
 
                                 var decoded_count: usize = 0;
                                 defer {
-                                    inline for (fn_info.params[1..], 1..) |param, i| {
-                                        const PT = param.type.?;
+                                    inline for (fn_info.param_types[1..], 1..) |param_type, i| {
+                                        const PT = param_type.?;
                                         if (@typeInfo(PT) == .pointer and @typeInfo(PT).pointer.size == .slice) {
                                             if (i <= decoded_count) {
                                                 conn.__allocator.free(args[i]);
@@ -279,15 +279,15 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                                     }
                                 }
 
-                                inline for (fn_info.params[1..], 1..) |param, i| {
-                                    if (param.type.? == core.Message) {
+                                inline for (fn_info.param_types[1..], 1..) |param_type, i| {
+                                    if (param_type.? == core.Message) {
                                         args[i] = msg;
-                                    } else if (param.type.? == *const core.Message or param.type.? == *core.Message) {
+                                    } else if (param_type.? == *const core.Message or param_type.? == *core.Message) {
                                         args[i] = &msg;
-                                    } else if (param.type.? == *Connection) {
+                                    } else if (param_type.? == *Connection) {
                                         args[i] = conn;
                                     } else {
-                                        args[i] = try decoder.decode(param.type.?);
+                                        args[i] = try decoder.decode(param_type.?);
                                     }
                                     decoded_count = i;
                                 }

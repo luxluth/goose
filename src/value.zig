@@ -216,10 +216,10 @@ pub const Value = struct {
         if (info == .@"struct") {
             if (@hasDecl(T, "KV") and @hasDecl(T, "iterator")) {
                 const kv_info = @typeInfo(T.KV);
-                if (kv_info == .@"struct" and kv_info.@"struct".fields.len == 2) {
-                    const f0 = kv_info.@"struct".fields[0];
-                    const f1 = kv_info.@"struct".fields[1];
-                    return std.mem.eql(u8, f0.name, "key") and std.mem.eql(u8, f1.name, "value");
+                if (kv_info == .@"struct" and kv_info.@"struct".field_names.len == 2) {
+                    const f0 = kv_info.@"struct".field_names[0];
+                    const f1 = kv_info.@"struct".field_names[1];
+                    return std.mem.eql(u8, f0, "key") and std.mem.eql(u8, f1, "value");
                 }
             }
         }
@@ -227,8 +227,8 @@ pub const Value = struct {
     }
 
     pub fn dictKV(comptime T: type) struct { key: type, val: type } {
-        const fields = @typeInfo(T.KV).@"struct".fields;
-        return .{ .key = fields[0].type, .val = fields[1].type };
+        const field_types = @typeInfo(T.KV).@"struct".field_types;
+        return .{ .key = field_types[0], .val = field_types[1] };
     }
 
     fn dictKeyReprLen(comptime K: type) comptime_int {
@@ -239,8 +239,8 @@ pub const Value = struct {
     fn doesImplementSer(comptime T: type) bool {
         if (std.meta.hasMethod(T, "ser")) {
             const Args = std.meta.ArgsTuple(@TypeOf(T.ser));
-            const fx = std.meta.fields(Args);
-            return (fx.len == 2 and fx[0].type == T and fx[1].type == *DBusWriter);
+            const fx = @typeInfo(Args).@"struct".field_types;
+            return (fx.len == 2 and fx[0] == T and fx[1] == *DBusWriter);
         }
 
         return false;
@@ -270,13 +270,13 @@ pub const Value = struct {
                 return 1;
             },
             .@"struct" => |s_info| {
-                const is_dict_entry = s_info.fields.len == 2 and (std.mem.eql(u8, s_info.fields[0].name, "key") and std.mem.eql(u8, s_info.fields[1].name, "value"));
+                const is_dict_entry = s_info.field_names.len == 2 and (std.mem.eql(u8, s_info.field_names[0], "key") and std.mem.eql(u8, s_info.field_names[1], "value"));
                 var len: usize = if (is_dict_entry or !s_info.is_tuple) 2 else 0;
-                inline for (s_info.fields) |field| {
-                    if (is_dict_entry and (field.type == []const u8 or field.type == [:0]const u8 or field.type == []u8 or field.type == [:0]u8) and std.mem.eql(u8, field.name, "key")) {
+                inline for (s_info.field_names, s_info.field_types) |field_name, field_type| {
+                    if (is_dict_entry and (field_type == []const u8 or field_type == [:0]const u8 or field_type == []u8 or field_type == [:0]u8) and std.mem.eql(u8, field_name, "key")) {
                         len += 1;
                     } else {
-                        len += reprLength(field.type);
+                        len += reprLength(field_type);
                     }
                 }
                 return len;
@@ -350,7 +350,7 @@ pub const Value = struct {
             .float => xs[real_start] = 'd',
             .bool => xs[real_start] = 'b',
             .@"struct" => |s_info| {
-                const is_dict_entry = s_info.fields.len == 2 and (std.mem.eql(u8, s_info.fields[0].name, "key") and std.mem.eql(u8, s_info.fields[1].name, "value"));
+                const is_dict_entry = s_info.field_names.len == 2 and (std.mem.eql(u8, s_info.field_names[0], "key") and std.mem.eql(u8, s_info.field_names[1], "value"));
                 if (is_dict_entry) {
                     xs[real_start] = '{';
                     real_start += 1;
@@ -360,13 +360,13 @@ pub const Value = struct {
                     real_start += 1;
                     xs[len - 1] = ')';
                 }
-                inline for (s_info.fields) |field| {
-                    if (is_dict_entry and (field.type == []const u8 or field.type == [:0]const u8 or field.type == []u8 or field.type == [:0]u8) and std.mem.eql(u8, field.name, "key")) {
+                inline for (s_info.field_names, s_info.field_types) |field_name, field_type| {
+                    if (is_dict_entry and (field_type == []const u8 or field_type == [:0]const u8 or field_type == []u8 or field_type == [:0]u8) and std.mem.eql(u8, field_name, "key")) {
                         xs[real_start] = 's';
                         real_start += 1;
                     } else {
-                        const ll = reprLength(field.type);
-                        getRepr(field.type, ll, 0, @as(*[ll]u8, @ptrCast(xs[real_start..][0..ll])));
+                        const ll = reprLength(field_type);
+                        getRepr(field_type, ll, 0, @as(*[ll]u8, @ptrCast(xs[real_start..][0..ll])));
                         real_start += ll;
                     }
                 }
@@ -396,7 +396,7 @@ pub const Value = struct {
         const inner_len = reprLength(T);
         const repr_len = 1 + inner_len;
         const rr = blk: {
-            var res = [_]u8{0} ** (repr_len + 1);
+            var res: [repr_len + 1]u8 = @splat(0);
             res[0] = 'a';
             getRepr(T, inner_len, 0, @as(*[inner_len]u8, @ptrCast(res[1..repr_len].ptr)));
             res[repr_len] = 0;
@@ -455,7 +455,7 @@ pub const Value = struct {
         if (info != .@"struct" or !info.@"struct".is_tuple) @compileError("Tuple() expects a tuple struct");
 
         const repr_len = reprLength(T);
-        var repr_arr = [_]u8{0} ** (repr_len);
+        var repr_arr: [repr_len]u8 = @splat(0);
         getRepr(T, repr_len, 0, &repr_arr);
         const rr = repr_arr;
         return struct {
@@ -472,9 +472,9 @@ pub const Value = struct {
             }
 
             pub fn ser(self: Self, w: *DBusWriter) !void {
-                inline for (info.@"struct".fields) |fld| {
-                    try w.padTo(dbusAlignOf(fld.type));
-                    try Serializer.trySerialize(fld.type, @field(self.inner, fld.name), w);
+                inline for (info.@"struct".field_names, info.@"struct".field_types) |fld_name, fld_type| {
+                    try w.padTo(dbusAlignOf(fld_type));
+                    try Serializer.trySerialize(fld_type, @field(self.inner, fld_name), w);
                 }
             }
         };
@@ -526,7 +526,7 @@ pub const Value = struct {
             @compileError("unexpected input type");
         }
         const repr_len = reprLength(S);
-        var repr_arr = [_]u8{0} ** (repr_len);
+        var repr_arr: [repr_len]u8 = @splat(0);
         getRepr(S, repr_len, 0, &repr_arr);
         const rr = repr_arr;
         return struct {
@@ -545,17 +545,17 @@ pub const Value = struct {
             pub fn ser(self: Self, w: *DBusWriter) !void {
                 try w.padTo(8);
                 const sinfo = @typeInfo(S).@"struct";
-                const is_dict_entry = sinfo.fields.len == 2 and (std.mem.eql(u8, sinfo.fields[0].name, "key") and std.mem.eql(u8, sinfo.fields[1].name, "value"));
-                inline for (sinfo.fields) |fld| {
-                    try w.padTo(dbusAlignOf(fld.type));
-                    if (is_dict_entry and (fld.type == []const u8 or fld.type == [:0]const u8 or fld.type == []u8 or fld.type == [:0]u8) and std.mem.eql(u8, fld.name, "key")) {
+                const is_dict_entry = sinfo.field_names.len == 2 and (std.mem.eql(u8, sinfo.field_names[0], "key") and std.mem.eql(u8, sinfo.field_names[1], "value"));
+                inline for (sinfo.field_names, sinfo.field_types) |fld_name, fld_type| {
+                    try w.padTo(dbusAlignOf(fld_type));
+                    if (is_dict_entry and (fld_type == []const u8 or fld_type == [:0]const u8 or fld_type == []u8 or fld_type == [:0]u8) and std.mem.eql(u8, fld_name, "key")) {
                         try w.padTo(4);
-                        const slice = @field(self.inner, fld.name);
+                        const slice = @field(self.inner, fld_name);
                         try w.writeInt(u32, @intCast(slice.len));
                         try w.buffer.appendSlice(w.gpa, slice);
                         try w.buffer.append(w.gpa, 0);
                     } else {
-                        try Serializer.trySerialize(fld.type, @field(self.inner, fld.name), w);
+                        try Serializer.trySerialize(fld_type, @field(self.inner, fld_name), w);
                     }
                 }
             }
@@ -564,7 +564,7 @@ pub const Value = struct {
 
     fn BasicType(comptime T: type) type {
         const repr_len = reprLength(T);
-        var repr_arr = [_]u8{0} ** repr_len;
+        var repr_arr: [repr_len]u8 = @splat(0);
         getRepr(T, repr_len, 0, &repr_arr);
         const rr = repr_arr;
         return struct {
@@ -601,7 +601,7 @@ pub const Value = struct {
             const Self = @This();
 
             pub fn new(value: [:0]const u8) Self {
-                var repr_arr = [_]u8{0} ** repr_len;
+                var repr_arr: [repr_len]u8 = @splat(0);
                 repr_arr[0] = r;
                 return Self{
                     .value = value,
@@ -677,7 +677,7 @@ pub const Value = struct {
     /// It representation in the protocol is a `UINT32`
     pub fn Bool() type {
         const repr_len = reprLength(bool);
-        var repr_arr = [_]u8{0} ** repr_len;
+        var repr_arr: [repr_len]u8 = @splat(0);
         getRepr(bool, repr_len, 0, &repr_arr);
         const rr = repr_arr;
         return struct {
@@ -709,7 +709,7 @@ pub const Value = struct {
             const Self = @This();
 
             pub fn new(handle: u32) Self {
-                var repr_arr = [_]u8{0} ** repr_len;
+                var repr_arr: [repr_len]u8 = @splat(0);
                 repr_arr[0] = 'h';
                 return Self{
                     .handle = handle,

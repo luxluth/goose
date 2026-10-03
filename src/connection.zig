@@ -17,7 +17,7 @@ pub const CallState = enum(u32) {
 };
 
 pub const PendingCall = struct {
-    state: std.atomic.Value(u32) = .init(@intFromEnum(CallState.pending)),
+    state: std.atomic.Value(u32) = .init(@backingInt(CallState.pending)),
     reply: ?core.Message = null,
 };
 
@@ -63,7 +63,7 @@ pub fn MutexMap(comptime K: type, comptime V: type) type {
             defer self.mutex.unlock(self.io);
             var it = self.map.valueIterator();
             while (it.next()) |pending_ptr| {
-                pending_ptr.*.state.store(@intFromEnum(CallState.err), .release);
+                pending_ptr.*.state.store(@backingInt(CallState.err), .release);
                 self.io.futexWake(u32, &pending_ptr.*.state.raw, 1);
             }
         }
@@ -327,7 +327,7 @@ pub const Connection = struct {
             if (reply_serial) |serial| {
                 if (self.pending_calls.get(serial)) |pending| {
                     pending.reply = msg;
-                    pending.state.store(@intFromEnum(CallState.completed), .release);
+                    pending.state.store(@backingInt(CallState.completed), .release);
                     self.io.futexWake(u32, &pending.state.raw, 1);
                     return true;
                 }
@@ -551,7 +551,7 @@ pub const Connection = struct {
 
         const header = core.MessageHeader{
             .message_type = core.MessageType.MethodCall,
-            .flags = @intFromEnum(core.MessageFlag.__EMPTY),
+            .flags = @backingInt(core.MessageFlag.__EMPTY),
             .proto_version = 1,
             .body_length = 0,
             .serial = serial,
@@ -629,8 +629,8 @@ pub const Connection = struct {
         var dwriter = DBusWriter.init(&body_arr, self.__allocator, .little);
 
         const flags =
-            @intFromEnum(RequestNameFlags.DoNotQueue) |
-            @intFromEnum(RequestNameFlags.ReplaceExisting);
+            @backingInt(RequestNameFlags.DoNotQueue) |
+            @backingInt(RequestNameFlags.ReplaceExisting);
 
         try Str.new(name).ser(&dwriter);
         try U32.new(flags).ser(&dwriter);
@@ -709,10 +709,11 @@ pub const Connection = struct {
 
         // Bind signals
         // We iterate over fields. If a field is a Signal, we set its interface and path.
-        inline for (std.meta.fields(T)) |field| {
-            const FieldType = field.type;
+        const typeinfo = @typeInfo(T).@"struct";
+        inline for (typeinfo.field_names, typeinfo.field_types) |field_name, field_type| {
+            const FieldType = field_type;
             if (@typeInfo(FieldType) == .@"struct" and @hasDecl(FieldType, "__is_goose_signal")) {
-                var sig = &@field(instance_ptr, field.name);
+                var sig = &@field(instance_ptr, field_name);
                 sig.interface = interface_name;
                 sig.path = path;
             }
@@ -759,11 +760,11 @@ pub const Connection = struct {
             dst = f.value.Sender;
         };
         if (dst) |d| {
-            try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeZ(u8, d) } });
+            try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeSentinel(u8, d, 0) } });
         } else {
             std.debug.print("WARN: No Sender in request, reply has no Destination!\n", .{});
         }
-        try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = try self.__allocator.dupeZ(u8, enc.signature()) } });
+        try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = try self.__allocator.dupeSentinel(u8, enc.signature(), 0) } });
 
         const serial = self.nextSerial();
         const reply_h = core.MessageHeader{
@@ -831,14 +832,14 @@ pub const Connection = struct {
         }
 
         try reply_fields.append(self.__allocator, .{ .code = .ReplySerial, .value = .{ .ReplySerial = m.header.serial } });
-        try reply_fields.append(self.__allocator, .{ .code = .ErrorName, .value = .{ .ErrorName = try self.__allocator.dupeZ(u8, error_name) } });
+        try reply_fields.append(self.__allocator, .{ .code = .ErrorName, .value = .{ .ErrorName = try self.__allocator.dupeSentinel(u8, error_name, 0) } });
 
         var dst: ?[:0]const u8 = null;
         for (m.header.header_fields) |f| if (f.code == .Sender) {
             dst = f.value.Sender;
         };
         if (dst) |d| {
-            try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeZ(u8, d) } });
+            try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeSentinel(u8, d, 0) } });
         } else {
             std.debug.print("WARN: No Sender in request, error reply has no Destination!\n", .{});
         }
@@ -846,7 +847,7 @@ pub const Connection = struct {
         var encoder = try message.BodyEncoder.encode(self.__allocator, GStr.new(error_msg));
         defer encoder.deinit();
 
-        try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = try self.__allocator.dupeZ(u8, encoder.signature()) } });
+        try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = try self.__allocator.dupeSentinel(u8, encoder.signature(), 0) } });
 
         const serial = self.nextSerial();
         const reply_h = core.MessageHeader{
@@ -1191,7 +1192,7 @@ pub const Connection = struct {
                 if (reply_serial) |serial| {
                     if (self.pending_calls.get(serial)) |pending| {
                         pending.reply = msg;
-                        pending.state.store(@intFromEnum(CallState.completed), .release);
+                        pending.state.store(@backingInt(CallState.completed), .release);
                         self.io.futexWake(u32, &pending.state.raw, 1);
                     } else {
                         self.freeMessage(@constCast(&msg));
@@ -1225,7 +1226,7 @@ pub const Connection = struct {
             'B' => .big,
             else => return error.BadEndianFlag,
         };
-        const mtype: core.MessageType = @enumFromInt(header_buf[1]);
+        const mtype: core.MessageType = @fromBackingInt(@intCast(header_buf[1]));
         const flags = header_buf[2];
         const version = header_buf[3];
         const body_len = std.mem.readInt(u32, header_buf[4..8], endian);
@@ -1270,7 +1271,7 @@ pub const Connection = struct {
             if (freader.seek >= fields_len) break;
 
             const code_u8 = try freader.takeByte();
-            const code: core.HeaderFieldCode = if (code_u8 <= 9) @enumFromInt(code_u8) else .Invalid;
+            const code: core.HeaderFieldCode = if (code_u8 <= 9) @fromBackingInt(@intCast(code_u8)) else .Invalid;
 
             // Variant signature (we assume standard fields have correct types)
             const sig_len = try freader.takeByte();
@@ -1421,7 +1422,7 @@ pub const Connection = struct {
                     if (reply_serial) |rserial| {
                         if (self.pending_calls.get(rserial)) |p| {
                             p.reply = msg;
-                            p.state.store(@intFromEnum(CallState.completed), .release);
+                            p.state.store(@backingInt(CallState.completed), .release);
                             continue;
                         }
                     }
@@ -1432,11 +1433,11 @@ pub const Connection = struct {
             }
         }
 
-        while (pending.state.load(.acquire) == @intFromEnum(CallState.pending)) {
-            self.io.futexWaitUncancelable(u32, &pending.state.raw, @intFromEnum(CallState.pending));
+        while (pending.state.load(.acquire) == @backingInt(CallState.pending)) {
+            self.io.futexWaitUncancelable(u32, &pending.state.raw, @backingInt(CallState.pending));
         }
 
-        if (pending.state.load(.acquire) == @intFromEnum(CallState.err)) {
+        if (pending.state.load(.acquire) == @backingInt(CallState.err)) {
             return error.ConnectionClosed;
         }
 
