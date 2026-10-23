@@ -123,6 +123,24 @@ pub fn build(b: *std.Build) void {
     const fd_step = b.step("test-fd", "Run UNIX file descriptor passing tests");
     fd_step.dependOn(&run_fd.step);
 
+    const single_threaded_exe = b.addExecutable(.{
+        .name = "goose-single-threaded-test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests/single_threaded_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .single_threaded = true,
+            .imports = &.{
+                .{ .name = "goose", .module = mod },
+            },
+        }),
+    });
+
+    const run_st = b.addRunArtifact(single_threaded_exe);
+    run_st.addPassthruArgs();
+    const st_step = b.step("test-st", "Run single threaded compilation test");
+    st_step.dependOn(&run_st.step);
+
     const intro_exe = b.addExecutable(.{
         .name = "goose-introspection",
         .root_module = b.createModule(.{

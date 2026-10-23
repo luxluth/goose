@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const net = std.Io.net;
 const core = @import("core.zig");
 const message = @import("message_utils.zig");
@@ -263,7 +264,7 @@ pub const SocketReader = struct {
 /// Represents a connection to a D-Bus bus (session or system).
 /// Manages message sending, receiving, and object registration.
 pub const Connection = struct {
-    backend: Backend = .threaded,
+    backend: Backend = if (builtin.single_threaded) .poll else .threaded,
     supports_unix_fd: bool = false,
     io: std.Io,
     __inner_sock: net.Stream,
@@ -467,11 +468,15 @@ pub const Connection = struct {
     /// `io`: Mandatory [`std.Io`]
     /// `vars`: Environment variables provided from the entry point
     pub fn init(allocator: std.mem.Allocator, bus_type: BusType, io: std.Io, vars: *std.process.Environ.Map) !Connection {
-        return initWithBackend(allocator, bus_type, io, vars, .threaded);
+        return initWithBackend(allocator, bus_type, io, vars, if (builtin.single_threaded) .poll else .threaded);
     }
 
     /// Initializes a new connection to the D-Bus bus with the specified backend (.threaded or .poll).
     pub fn initWithBackend(allocator: std.mem.Allocator, bus_type: BusType, io: std.Io, vars: *std.process.Environ.Map, backend: Backend) !Connection {
+        if (builtin.single_threaded and backend == .threaded) {
+            return error.InvalidBackend;
+        }
+
         var socket_paths: SocketIterator = undefined;
         var unix_addr: net.UnixAddress = undefined;
         var allocated_path: ?[]u8 = null;
@@ -581,14 +586,16 @@ pub const Connection = struct {
         self.__inner_sock.shutdown(self.io, .recv) catch {};
         self.__inner_sock.close(self.io);
 
-        if (self.worker_thread) |thread| {
-            thread.join();
-            self.worker_thread = null;
-        }
+        if (comptime !builtin.single_threaded) {
+            if (self.worker_thread) |thread| {
+                thread.join();
+                self.worker_thread = null;
+            }
 
-        if (self.dispatch_thread) |thread| {
-            thread.join();
-            self.dispatch_thread = null;
+            if (self.dispatch_thread) |thread| {
+                thread.join();
+                self.dispatch_thread = null;
+            }
         }
 
         self.serve_futex.store(1, .release);
@@ -862,22 +869,24 @@ pub const Connection = struct {
     }
 
     pub fn ensureWorkersStarted(self: *Connection) !void {
-        if (self.backend != .threaded) return;
-        if (self.worker_thread != null) return;
-        self.worker_init_mutex.lockUncancelable(self.io);
-        defer self.worker_init_mutex.unlock(self.io);
-        if (self.worker_thread == null) {
-            self.is_running.store(true, .release);
-            const dt = try std.Thread.spawn(.{}, dispatchLoop, .{self});
-            errdefer {
-                self.is_running.store(false, .release);
-                self.dispatch_queue.wakeAll();
-                dt.join();
-            }
-            self.dispatch_thread = dt;
+        if (comptime !builtin.single_threaded) {
+            if (self.backend != .threaded) return;
+            if (self.worker_thread != null) return;
+            self.worker_init_mutex.lockUncancelable(self.io);
+            defer self.worker_init_mutex.unlock(self.io);
+            if (self.worker_thread == null) {
+                self.is_running.store(true, .release);
+                const dt = try std.Thread.spawn(.{}, dispatchLoop, .{self});
+                errdefer {
+                    self.is_running.store(false, .release);
+                    self.dispatch_queue.wakeAll();
+                    dt.join();
+                }
+                self.dispatch_thread = dt;
 
-            const wt = try std.Thread.spawn(.{}, workerLoop, .{self});
-            self.worker_thread = wt;
+                const wt = try std.Thread.spawn(.{}, workerLoop, .{self});
+                self.worker_thread = wt;
+            }
         }
     }
 
@@ -890,7 +899,7 @@ pub const Connection = struct {
 
     /// Runs the main loop, sleeping securely while background threads handle messages.
     pub fn serve(self: *Connection) !void {
-        if (self.backend == .poll) {
+        if (builtin.single_threaded or self.backend == .poll) {
             return error.InvalidBackend;
         }
         if (self.is_initialized) {
