@@ -154,6 +154,8 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                             var encoder = try message.BodyEncoder.encode(conn.__allocator, val_variant);
                             defer encoder.deinit();
                             try conn.sendReply(msg, encoder);
+                        } else {
+                            try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "No such readable property");
                         }
 
                         return .dispatched; // to this interface
@@ -170,12 +172,12 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                         try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "Invalid property name argument");
                         return .dispatched;
                     };
-                    const val_union = decoder.decode(PropUnion) catch {
-                        try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidSignature", "Property value signature mismatch");
-                        return .dispatched;
-                    };
-
                     if (std.mem.eql(u8, requested_iface.s, w.interface_name)) {
+                        const val_union = decoder.decode(PropUnion) catch {
+                            try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidSignature", "Property value signature mismatch");
+                            return .dispatched;
+                        };
+
                         var found = false;
                         const struct_info = @typeInfo(T).@"struct";
                         inline for (struct_info.field_names, struct_info.field_types) |f_name, f_type| {
@@ -243,6 +245,8 @@ pub fn getDispatchFn(comptime T: type) fn (*const common.InterfaceWrapper, *Conn
                             var encoder = try message.BodyEncoder.encode(conn.__allocator, .{}); // Void return;
                             defer encoder.deinit();
                             try conn.sendReply(msg, encoder);
+                        } else {
+                            try conn.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "No such writable property, or wrong value type");
                         }
 
                         return .dispatched; // to this interface
