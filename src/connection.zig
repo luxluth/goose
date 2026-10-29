@@ -750,6 +750,8 @@ pub const Connection = struct {
 
     /// Sends a reply to a method call.
     pub fn sendReply(self: *Connection, m: core.Message, enc: message.BodyEncoder) !void {
+        if (m.header.flags & @backingInt(core.MessageFlag.NoReplyExpected) != 0) return;
+
         var reply_fields = try std.ArrayList(core.HeaderField).initCapacity(self.__allocator, 3);
         defer {
             for (reply_fields.items) |f| {
@@ -787,6 +789,8 @@ pub const Connection = struct {
 
     /// Sends a reply to a method call passing file descriptors.
     pub fn sendReplyWithFds(self: *Connection, m: core.Message, enc: message.BodyEncoder, fds: []const std.posix.fd_t) !void {
+        if (m.header.flags & @backingInt(core.MessageFlag.NoReplyExpected) != 0) return;
+
         var reply_fields = try std.ArrayList(core.HeaderField).initCapacity(self.__allocator, 4);
         defer {
             for (reply_fields.items) |f| {
@@ -804,11 +808,11 @@ pub const Connection = struct {
             dst = f.value.Sender;
         };
         if (dst) |d| {
-            try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeZ(u8, d) } });
+            try reply_fields.append(self.__allocator, .{ .code = .Destination, .value = .{ .Destination = try self.__allocator.dupeSentinel(u8, d, 0) } });
         } else {
             std.debug.print("WARN: No Sender in request, reply has no Destination!\n", .{});
         }
-        try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = try self.__allocator.dupeZ(u8, enc.signature()) } });
+        try reply_fields.append(self.__allocator, .{ .code = .Signature, .value = .{ .Signature = try self.__allocator.dupeSentinel(u8, enc.signature(), 0) } });
         if (fds.len > 0) {
             try reply_fields.append(self.__allocator, .{ .code = .UnixFds, .value = .{ .UnixFds = @intCast(fds.len) } });
         }
@@ -827,6 +831,8 @@ pub const Connection = struct {
 
     /// Sends an Error reply to a message.
     pub fn sendError(self: *Connection, m: core.Message, error_name: [:0]const u8, error_msg: [:0]const u8) !void {
+        if (m.header.flags & @backingInt(core.MessageFlag.NoReplyExpected) != 0) return;
+
         var reply_fields = try std.ArrayList(core.HeaderField).initCapacity(self.__allocator, 4);
         defer {
             for (reply_fields.items) |f| {
@@ -939,14 +945,22 @@ pub const Connection = struct {
 
             if (path) |p| {
                 var handled = false;
+                var path_exists = false;
+                var iface_exists = false;
                 var intro_interfaces: std.ArrayList(u8) = .empty;
                 defer intro_interfaces.deinit(self.__allocator);
 
                 for (self.registered_interfaces.items) |*w| {
+                    if (handled) break;
+
                     // Check path first
                     if (std.mem.eql(u8, w.path, p)) {
+                        path_exists = true;
+
                         // Then check interface or Introspectable
                         if (iface) |i| {
+                            if (std.mem.eql(u8, w.interface_name, i)) iface_exists = true;
+
                             if (std.mem.eql(u8, i, "org.freedesktop.DBus.Introspectable") and
                                 member != null and std.mem.eql(u8, member.?, "Introspect"))
                             {
@@ -963,12 +977,12 @@ pub const Connection = struct {
                             {
                                 // Dispatch
                                 const dispatch_result = try w.dispatch(w, self, msg);
-                                handled = dispatch_result == .dispatched;
+                                if (dispatch_result == .dispatched) handled = true;
                             }
                         } else {
                             // Fallback dispatch
                             const dispatch_result = try w.dispatch(w, self, msg);
-                            handled = dispatch_result == .dispatched;
+                            if (dispatch_result == .dispatched) handled = true;
                         }
                     }
                 }
@@ -987,7 +1001,7 @@ pub const Connection = struct {
                 }
 
                 // Handle GetAll when no interfaces match
-                if (!handled and
+                if (!handled and path_exists and
                     iface != null and std.mem.eql(u8, iface.?, "org.freedesktop.DBus.Properties") and
                     member != null and std.mem.eql(u8, member.?, "GetAll"))
                 {
@@ -1063,7 +1077,32 @@ pub const Connection = struct {
                             var encoder = try message.BodyEncoder.encode(self.__allocator, GStr.new(xml_slice));
                             defer encoder.deinit();
                             try self.sendReply(msg, encoder);
+                            handled = true;
                         }
+                    }
+                }
+
+                if (!handled) {
+                    const is_properties = iface != null and std.mem.eql(u8, iface.?, "org.freedesktop.DBus.Properties");
+                    const is_standard = is_properties or
+                        (iface != null and std.mem.eql(u8, iface.?, "org.freedesktop.DBus.Introspectable"));
+
+                    if (!path_exists) {
+                        const text = try std.fmt.allocPrintSentinel(self.__allocator, "No such object path '{s}'", .{p}, 0);
+                        defer self.__allocator.free(text);
+                        try self.sendError(msg, "org.freedesktop.DBus.Error.UnknownObject", text);
+                    } else if (is_properties and member != null and
+                        (std.mem.eql(u8, member.?, "Get") or std.mem.eql(u8, member.?, "Set")))
+                    {
+                        try self.sendError(msg, "org.freedesktop.DBus.Error.InvalidArgs", "No such interface");
+                    } else if (iface != null and !iface_exists and !is_standard) {
+                        const text = try std.fmt.allocPrintSentinel(self.__allocator, "No such interface '{s}' at object path '{s}'", .{ iface.?, p }, 0);
+                        defer self.__allocator.free(text);
+                        try self.sendError(msg, "org.freedesktop.DBus.Error.UnknownInterface", text);
+                    } else {
+                        const text = try std.fmt.allocPrintSentinel(self.__allocator, "No such method '{s}'", .{member orelse ""}, 0);
+                        defer self.__allocator.free(text);
+                        try self.sendError(msg, "org.freedesktop.DBus.Error.UnknownMethod", text);
                     }
                 }
             }
