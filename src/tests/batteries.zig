@@ -6,7 +6,6 @@ const GPath = goose.core.value.GPath;
 const GSig = goose.core.value.GSig;
 const GUFd = goose.core.value.GUFd;
 const GVariant = goose.core.value.GVariant;
-
 pub const PropertiesProxy = struct {
     inner: proxy.Proxy,
 
@@ -19,21 +18,24 @@ pub const PropertiesProxy = struct {
         defer res.deinit();
         return res.expectAlloc(GVariant);
     }
+
     pub fn GetAll(self: PropertiesProxy, interface_name: GStr) !std.StringHashMap(GVariant) {
         var res = try self.inner.call("GetAll", .{interface_name});
         defer res.deinit();
         return res.expectAlloc(std.StringHashMap(GVariant));
     }
+
     pub fn Set(self: PropertiesProxy, interface_name: GStr, property_name: GStr, value: GVariant) !void {
         var res = try self.inner.call("Set", .{ interface_name, property_name, value });
-        res.deinit();
+        defer res.deinit();
     }
+
     pub fn connectPropertiesChanged(
         self: PropertiesProxy,
         ctx: anytype,
-        comptime callback: fn (@TypeOf(ctx), @Tuple(&[_]type{ GStr, std.StringHashMap(GVariant), []const GStr })) void,
+        comptime callback: fn (@TypeOf(ctx), struct { GStr, std.StringHashMap(GVariant), []const GStr }) void,
     ) !void {
-        try self.inner.connectSignal(@Tuple(&[_]type{ GStr, std.StringHashMap(GVariant), []const GStr }), "PropertiesChanged", ctx, callback);
+        try self.inner.connectSignal(struct { GStr, std.StringHashMap(GVariant), []const GStr }, "PropertiesChanged", ctx, callback);
     }
 };
 
@@ -60,8 +62,9 @@ pub const PeerProxy = struct {
 
     pub fn Ping(self: PeerProxy) !void {
         var res = try self.inner.call("Ping", .{});
-        res.deinit();
+        defer res.deinit();
     }
+
     pub fn GetMachineId(self: PeerProxy) !GStr {
         var res = try self.inner.call("GetMachineId", .{});
         defer res.deinit();
@@ -81,33 +84,37 @@ pub const UPowerProxy = struct {
         defer res.deinit();
         return res.expectAlloc([]const GPath);
     }
+
     pub fn EnumerateKbdBacklights(self: UPowerProxy) ![]const GPath {
         var res = try self.inner.call("EnumerateKbdBacklights", .{});
         defer res.deinit();
         return res.expectAlloc([]const GPath);
     }
+
     pub fn GetDisplayDevice(self: UPowerProxy) !GPath {
         var res = try self.inner.call("GetDisplayDevice", .{});
         defer res.deinit();
         return res.expectAlloc(GPath);
     }
+
     pub fn GetCriticalAction(self: UPowerProxy) !GStr {
         var res = try self.inner.call("GetCriticalAction", .{});
         defer res.deinit();
         return res.expectAlloc(GStr);
     }
+
     pub fn connectDeviceAdded(
         self: UPowerProxy,
         ctx: anytype,
-        comptime callback: fn (@TypeOf(ctx), @Tuple(&[_]type{GPath})) void,
+        comptime callback: fn (@TypeOf(ctx), struct { GPath }) void,
     ) !void {
-        try self.inner.connectSignal(@Tuple(&[_]type{GPath}), "DeviceAdded", ctx, callback);
+        try self.inner.connectSignal(struct { GPath }, "DeviceAdded", ctx, callback);
     }
     pub fn connectDeviceRemoved(
         self: UPowerProxy,
         ctx: anytype,
-        comptime callback: fn (@TypeOf(ctx), @Tuple(&[_]type{GPath})) void,
+        comptime callback: fn (@TypeOf(ctx), struct { GPath }) void,
     ) !void {
-        try self.inner.connectSignal(@Tuple(&[_]type{GPath}), "DeviceRemoved", ctx, callback);
+        try self.inner.connectSignal(struct { GPath }, "DeviceRemoved", ctx, callback);
     }
 };
